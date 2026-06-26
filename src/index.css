@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+/* Custom Theme Colors */
+:root {
+  --emerald-dark: #0a6e5a;
+  --emerald-medium: #1a8f7a;
+  --emerald-light: #3db89e;
+  --emerald-pale: #a8e6cf;
+  --seashell-white: #fdf8f3;
+  --seashell-cream: #f5ede3;
+  --noon-sun: #ffd93d;
+  --noon-warm: #f9a826;
+  --ocean-blue: #4a90d9;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--seashell-cream);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--emerald-light);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--emerald-medium);
+}
+
+/* Smooth Transitions */
+* {
+  transition: all 0.2s ease-in-out;
+}
+
+/* Custom Animations */
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.float-animation {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* Glassmorphism */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Gradient Text */
+.gradient-text {
+  background: linear-gradient(
+    135deg,
+    var(--emerald-dark),
+    var(--emerald-light)
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Custom Focus Rings */
+.focus-ring-emerald:focus {
+  outline: none;
+  ring: 2px solid var(--emerald-light);
+  ring-offset: 2px;
+}
