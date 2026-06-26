@@ -1,8 +1,9 @@
 // src/pages/ForgotPassword.jsx
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { FaEnvelope, FaArrowLeft, FaSpinner } from "react-icons/fa";
 import { useAuthActions } from "../hooks/useAuthActions";
+import Alert from "../components/Alert";
 
 const ForgotPassword = () => {
   const navigate = useNavigate();
@@ -50,22 +51,17 @@ const ForgotPassword = () => {
           </p>
         </div>
 
-        {message && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl mb-4">
-            {message}
-          </div>
-        )}
+        <Alert
+          type="success"
+          message={message}
+          onClose={() => setMessage("")}
+        />
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl mb-4 flex items-start justify-between">
-            <span className="text-sm">{error}</span>
-            <button
-              onClick={() => setError("")}
-              className="text-red-700 hover:text-red-900">
-              ×
-            </button>
-          </div>
-        )}
+        <Alert
+          type="error"
+          message={error}
+          onClose={() => setError("")}
+        />
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

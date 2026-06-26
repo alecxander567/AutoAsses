@@ -1,5 +1,5 @@
 // src/pages/Login.jsx
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   FaEnvelope,
@@ -15,6 +15,7 @@ import {
 } from "react-icons/fa";
 import { useAuthForm } from "../hooks/useAuthForm";
 import { useAuthActions } from "../hooks/useAuthActions";
+import Alert from "../components/Alert";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -149,16 +150,11 @@ const Login = () => {
             </div>
 
             {/* Error Alert */}
-            {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl mb-4 flex items-start justify-between">
-                <span className="text-sm">{error}</span>
-                <button
-                  onClick={() => setError("")}
-                  className="text-red-700 hover:text-red-900">
-                  ×
-                </button>
-              </div>
-            )}
+            <Alert
+              type="error"
+              message={error}
+              onClose={() => setError("")}
+            />
 
             {/* Google Login Button */}
             <button
