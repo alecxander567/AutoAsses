@@ -13,6 +13,8 @@ import {
   sendEmailVerification,
   sendPasswordResetEmail,
 } from "firebase/auth";
+import { getFirestore } from "firebase/firestore"; // Add this
+import { getStorage } from "firebase/storage"; // Add this
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -26,6 +28,8 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+const db = getFirestore(app); // Add this
+const storage = getStorage(app); // Add this
 
 // Google Auth Provider
 const googleProvider = new GoogleAuthProvider();
@@ -36,6 +40,8 @@ googleProvider.setCustomParameters({
 export {
   app,
   auth,
+  db, // Add this export
+  storage, // Add this export
   googleProvider,
   signInWithPopup,
   signInWithRedirect,

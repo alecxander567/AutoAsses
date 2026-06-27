@@ -1,5 +1,4 @@
 // src/components/LoadingSpinner.jsx
-import React from "react";
 import { FaSpinner } from "react-icons/fa";
 
 const LoadingSpinner = ({ size = "text-4xl", color = "text-emerald-600" }) => {

@@ -1,5 +1,5 @@
 // src/pages/Dashboard.jsx
-import React, { useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FaUser,
@@ -14,33 +14,62 @@ import {
   FaPlus,
   FaCloudUploadAlt,
   FaRobot,
-  FaGraduationCap,
   FaUsers,
-  FaClock,
-  FaStar,
   FaDownload,
   FaEye,
-  FaTrash,
-  FaEdit,
-  FaSearch,
   FaFilter,
   FaBell,
   FaCog,
   FaHome,
   FaBook,
   FaCalendarAlt,
-  FaExclamationTriangle,
-  FaCheckDouble,
   FaChartLine,
   FaRocket,
+  FaChalkboardTeacher,
 } from "react-icons/fa";
 import { useAuthActions } from "../hooks/useAuthActions";
+import { useClasses } from "../hooks/useClasses";
+import AddClassModal from "../components/AddClassModal";
+import ClassCard from "../components/ClassCard";
+import ClassDetailsView from "../components/ClassDetailsView";
+import AddStudentModal from "../components/AddStudentModal";
+import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
+import Alert from "../components/Alert";
+import QuizCard from "../components/QuizCard";
+import AddQuizModal from "../components/AddQuizModal";
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, loading, handleLogout } = useAuthActions();
+  const { user, loading: authLoading, handleLogout } = useAuthActions();
+  const {
+    classes,
+    loading: classesLoading,
+    actionLoading,
+    addClass,
+    editClass,
+    deleteClass,
+    addStudent,
+    removeStudent,
+    editStudent,
+    addQuiz,
+    editQuiz,
+    deleteQuiz,
+    getClassById,
+  } = useClasses();
   const [activeTab, setActiveTab] = useState("overview");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showAddClassModal, setShowAddClassModal] = useState(false);
+  const [classToEdit, setClassToEdit] = useState(null);
+  const [selectedClassId, setSelectedClassId] = useState(null);
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [showEditStudentModal, setShowEditStudentModal] = useState(false);
+  const [studentToEdit, setStudentToEdit] = useState(null);
+  const [showAddQuizModal, setShowAddQuizModal] = useState(false);
+  const [quizToEdit, setQuizToEdit] = useState(null);
+  const [quizToDelete, setQuizToDelete] = useState(null);
+  const [alert, setAlert] = useState({ type: "", message: "" });
+  const [deletingId, setDeletingId] = useState(null);
+  const [classToDelete, setClassToDelete] = useState(null);
 
   const handleLogoutClick = async () => {
     const result = await handleLogout();
@@ -49,14 +78,176 @@ const Dashboard = () => {
     }
   };
 
-  // Mock Data
+  const showAlert = (type, message) => {
+    setAlert({ type, message });
+  };
+
+  const handleAddClass = async (className, description) => {
+    const result = await addClass(className, description);
+    if (result.success) {
+      showAlert(
+        "success",
+        `Class "${className}" has been created successfully!`,
+      );
+    }
+    return result;
+  };
+
+  const handleEditClass = (cls) => {
+    setClassToEdit(cls);
+    setShowAddClassModal(true);
+  };
+
+  const handleModalSubmit = async (className, description) => {
+    if (classToEdit) {
+      const result = await editClass(classToEdit.id, className, description);
+      if (result.success) {
+        showAlert(
+          "success",
+          `Class "${className}" has been updated successfully!`,
+        );
+      }
+      return result;
+    } else {
+      return await handleAddClass(className, description);
+    }
+  };
+
+  const handleViewClass = (classId) => {
+    setSelectedClassId(classId);
+  };
+
+  const handleBackToClasses = () => {
+    setSelectedClassId(null);
+  };
+
+  const handleAddStudent = async (studentName, studentEmail) => {
+    if (!selectedClassId) return { success: false, error: "No class selected" };
+    const result = await addStudent(selectedClassId, studentName, studentEmail);
+    if (result.success) {
+      showAlert(
+        "success",
+        `Student "${studentName}" has been added successfully!`,
+      );
+    }
+    return result;
+  };
+
+  const handleRemoveStudent = async (classId, studentId) => {
+    const result = await removeStudent(classId, studentId);
+    if (result.success) {
+      showAlert("success", "Student has been removed from the class.");
+    }
+    return result;
+  };
+
+  const handleEditStudent = (student) => {
+    setStudentToEdit(student);
+    setShowEditStudentModal(true);
+  };
+
+  const handleEditStudentSubmit = async (studentName, studentEmail) => {
+    if (!selectedClassId || !studentToEdit) {
+      return { success: false, error: "No class or student selected" };
+    }
+
+    const result = await editStudent(
+      selectedClassId,
+      studentToEdit.id,
+      studentName,
+      studentEmail,
+    );
+
+    if (result.success) {
+      showAlert(
+        "success",
+        `Student "${studentName}" has been updated successfully!`,
+      );
+    }
+    return result;
+  };
+
+  const handleRequestDelete = (classId) => {
+    const cls = classes.find((c) => c.id === classId);
+    setClassToDelete(cls);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!classToDelete) return;
+    setDeletingId(classToDelete.id);
+    const result = await deleteClass(classToDelete.id);
+    if (result.success) {
+      showAlert("success", `Class "${classToDelete.name}" has been deleted.`);
+    }
+    setDeletingId(null);
+    setClassToDelete(null);
+  };
+
+  // Quiz Handlers
+  const handleAddQuiz = async (classId, quizData) => {
+    const result = await addQuiz(classId, quizData);
+    if (result.success) {
+      showAlert(
+        "success",
+        `Quiz "${quizData.title}" has been created successfully!`,
+      );
+    }
+    return result;
+  };
+
+  const handleEditQuiz = async (classId, quizData) => {
+    if (!quizToEdit) return { success: false, error: "No quiz selected" };
+    const result = await editQuiz(classId, quizToEdit.id, quizData);
+    if (result.success) {
+      showAlert(
+        "success",
+        `Quiz "${quizData.title}" has been updated successfully!`,
+      );
+    }
+    return result;
+  };
+
+  const handleDeleteQuiz = async () => {
+    if (!quizToDelete) return;
+    const result = await deleteQuiz(quizToDelete.classId, quizToDelete.id);
+    if (result.success) {
+      showAlert("success", `Quiz "${quizToDelete.title}" has been deleted.`);
+    }
+    setQuizToDelete(null);
+    return result;
+  };
+
+  // Calculate real stats from classes
+  const totalQuizzes = classes.reduce(
+    (acc, cls) => acc + (cls.quizzes?.length || 0),
+    0,
+  );
+  const totalStudents = classes.reduce(
+    (acc, cls) => acc + (cls.students?.length || 0),
+    0,
+  );
+
+  // Calculate average score
+  let totalScore = 0;
+  let studentsWithScores = 0;
+  classes.forEach((cls) => {
+    cls.students?.forEach((student) => {
+      if (student.avgScore) {
+        totalScore += student.avgScore;
+        studentsWithScores++;
+      }
+    });
+  });
+  const avgScore = studentsWithScores > 0 ? totalScore / studentsWithScores : 0;
+
+  // Mock Data for overview (keep as fallback)
   const stats = {
-    totalQuizzes: 24,
+    totalQuizzes: totalQuizzes || 0,
     pendingChecks: 7,
     completedChecks: 156,
     accuracyRate: 94.5,
-    totalStudents: 89,
-    averageScore: 82.3,
+    totalStudents: totalStudents || 0,
+    averageScore: avgScore || 0,
   };
 
   const recentActivities = [
@@ -153,7 +344,7 @@ const Dashboard = () => {
     },
   ];
 
-  if (loading) {
+  if (authLoading || classesLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-seashell-cream">
         <FaSpinner className="animate-spin text-4xl text-emerald-600" />
@@ -220,7 +411,7 @@ const Dashboard = () => {
         <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-pink-200">
           <p className="text-xs sm:text-sm text-gray-500">Avg. Score</p>
           <p className="text-xl sm:text-2xl font-bold text-pink-600">
-            {stats.averageScore}%
+            {stats.averageScore.toFixed(1)}%
           </p>
           <p className="text-xs text-pink-600">📊 Class average</p>
         </div>
@@ -427,144 +618,168 @@ const Dashboard = () => {
   );
 
   // Quizzes Tab
-  const renderQuizzes = () => (
-    <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-      <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
-        <h3 className="font-bold text-gray-800 flex items-center gap-2">
-          <FaBook className="text-emerald-600" />
-          All Quizzes
-        </h3>
-        <button className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm">
-          <FaPlus />
-          Create Quiz
-        </button>
-      </div>
-      <div className="p-4 sm:p-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div
-              key={i}
-              className="border border-gray-200 rounded-xl p-4 hover:shadow-md transition">
-              <div className="flex items-start justify-between mb-3">
-                <div className="w-10 h-10 bg-emerald-100 rounded-lg flex items-center justify-center">
-                  <FaGraduationCap className="text-emerald-600" />
-                </div>
-                <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-xs rounded-full">
-                  Active
-                </span>
-              </div>
-              <h4 className="font-semibold text-gray-800">
-                Quiz #{i}: Subject Name
-              </h4>
-              <p className="text-sm text-gray-500 mt-1">
-                Created: Dec {i + 5}, 2024
-              </p>
-              <div className="flex items-center gap-4 mt-3 text-sm text-gray-500">
-                <span>👨‍🎓 {Math.floor(Math.random() * 30) + 10} students</span>
-                <span>📝 {Math.floor(Math.random() * 20) + 5} questions</span>
-              </div>
-              <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
-                <button className="flex-1 text-sm text-emerald-600 hover:text-emerald-800 font-medium">
-                  View Details
-                </button>
-                <button className="p-1.5 text-gray-400 hover:text-red-600 transition">
-                  <FaTrash className="text-sm" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  const renderQuizzes = () => {
+    // Get all quizzes from all classes
+    const allQuizzes = [];
+    classes.forEach((cls) => {
+      (cls.quizzes || []).forEach((quiz) => {
+        allQuizzes.push({
+          ...quiz,
+          className: cls.name,
+          classId: cls.id,
+          studentCount: cls.students?.length || 0,
+        });
+      });
+    });
 
-  // Students Tab
-  const renderStudents = () => (
-    <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-      <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
-        <h3 className="font-bold text-gray-800 flex items-center gap-2">
-          <FaUsers className="text-emerald-600" />
-          Students
-        </h3>
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Search students..."
-            className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
-          />
-          <button className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition text-sm">
-            Add Student
+    // Sort quizzes by creation date (newest first)
+    const sortedQuizzes = allQuizzes.sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+    );
+
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
+        <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
+          <h3 className="font-bold text-gray-800 flex items-center gap-2">
+            <FaBook className="text-emerald-600" />
+            All Quizzes
+          </h3>
+          <button
+            onClick={() => {
+              setShowAddQuizModal(true);
+              setQuizToEdit(null);
+            }}
+            className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm">
+            <FaPlus />
+            Create Quiz
           </button>
         </div>
+        <div className="p-4 sm:p-6">
+          {sortedQuizzes.length === 0 ?
+            <div className="text-center py-8 sm:py-12">
+              <div className="w-16 h-16 mx-auto mb-4 bg-emerald-50 rounded-2xl flex items-center justify-center">
+                <FaBook className="text-emerald-400 text-3xl" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-700 mb-2">
+                No Quizzes Yet
+              </h4>
+              <p className="text-sm text-gray-500 mb-4 max-w-md mx-auto">
+                Create your first quiz and associate it with a class to start
+                tracking student performance.
+              </p>
+              <button
+                onClick={() => {
+                  setShowAddQuizModal(true);
+                  setQuizToEdit(null);
+                }}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl hover:shadow-lg transition text-sm font-medium">
+                <FaPlus />
+                Create Your First Quiz
+              </button>
+            </div>
+          : <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {sortedQuizzes.map((quiz) => (
+                <QuizCard
+                  key={quiz.id}
+                  quiz={quiz}
+                  classId={quiz.classId}
+                  onEdit={() => {
+                    setQuizToEdit(quiz);
+                    setShowAddQuizModal(true);
+                  }}
+                  onDelete={(quizId) => {
+                    setQuizToDelete({
+                      id: quizId,
+                      classId: quiz.classId,
+                      title: quiz.title,
+                    });
+                  }}
+                  onView={(quiz) => {
+                    showAlert("info", `Viewing quiz: ${quiz.title}`);
+                  }}
+                  loading={actionLoading}
+                />
+              ))}
+            </div>
+          }
+        </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Student
-              </th>
-              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Email
-              </th>
-              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Quizzes Taken
-              </th>
-              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Avg. Score
-              </th>
-              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Status
-              </th>
-              <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <tr key={i} className="hover:bg-gray-50 transition">
-                <td className="px-4 sm:px-6 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
-                      <FaUser className="text-emerald-600 text-sm" />
-                    </div>
-                    <span className="text-sm font-medium text-gray-700">
-                      Student {i}
-                    </span>
-                  </div>
-                </td>
-                <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
-                  student{i}@example.com
-                </td>
-                <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
-                  {Math.floor(Math.random() * 15) + 5}
-                </td>
-                <td className="px-4 sm:px-6 py-3 text-sm font-medium text-ocean-blue">
-                  {Math.floor(Math.random() * 30) + 65}%
-                </td>
-                <td className="px-4 sm:px-6 py-3">
-                  <span className="px-2 py-1 bg-emerald-100 text-emerald-700 text-xs rounded-full">
-                    Active
-                  </span>
-                </td>
-                <td className="px-4 sm:px-6 py-3">
-                  <div className="flex items-center gap-2">
-                    <button className="p-1 text-gray-400 hover:text-emerald-600 transition">
-                      <FaEye className="text-sm" />
-                    </button>
-                    <button className="p-1 text-gray-400 hover:text-emerald-600 transition">
-                      <FaEdit className="text-sm" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    );
+  };
+
+  // Students Tab
+  const renderStudents = () => {
+    const selectedClass =
+      selectedClassId ? getClassById(selectedClassId) : null;
+
+    if (selectedClass) {
+      return (
+        <ClassDetailsView
+          classData={selectedClass}
+          onBack={handleBackToClasses}
+          onAddStudent={() => setShowAddStudentModal(true)}
+          onRemoveStudent={handleRemoveStudent}
+          onEditStudent={handleEditStudent}
+          loading={actionLoading}
+        />
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        {/* Classes Section */}
+        <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
+          <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <FaChalkboardTeacher className="text-emerald-600" />
+              My Classes
+            </h3>
+            <button
+              onClick={() => setShowAddClassModal(true)}
+              className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm">
+              <FaPlus />
+              Add Class
+            </button>
+          </div>
+
+          {classes.length === 0 ?
+            <div className="p-8 sm:p-12 text-center">
+              <div className="w-16 h-16 mx-auto mb-4 bg-emerald-50 rounded-2xl flex items-center justify-center">
+                <FaChalkboardTeacher className="text-emerald-400 text-3xl" />
+              </div>
+              <h4 className="text-lg font-semibold text-gray-700 mb-2">
+                No Classes Yet
+              </h4>
+              <p className="text-sm text-gray-500 mb-4 max-w-md mx-auto">
+                Create your first class to start organizing your students. Each
+                class can have its own set of students and quizzes.
+              </p>
+              <button
+                onClick={() => setShowAddClassModal(true)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl hover:shadow-lg transition text-sm font-medium">
+                <FaPlus />
+                Create Your First Class
+              </button>
+            </div>
+          : <div className="p-4 sm:p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {classes.map((cls) => (
+                  <ClassCard
+                    key={cls.id}
+                    classData={cls}
+                    onDelete={handleRequestDelete}
+                    onEdit={handleEditClass}
+                    onView={handleViewClass}
+                    deleting={deletingId === cls.id}
+                  />
+                ))}
+              </div>
+            </div>
+          }
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   // Analytics Tab
   const renderAnalytics = () => (
@@ -572,7 +787,9 @@ const Dashboard = () => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white rounded-xl p-4 shadow-sm border border-emerald-100/50">
           <p className="text-xs sm:text-sm text-gray-500">Average Score</p>
-          <p className="text-2xl font-bold text-emerald-900">82.3%</p>
+          <p className="text-2xl font-bold text-emerald-900">
+            {stats.averageScore.toFixed(1)}%
+          </p>
           <p className="text-xs text-emerald-600">↑ 3.2% this month</p>
         </div>
         <div className="bg-white rounded-xl p-4 shadow-sm border border-noon-warm/30">
@@ -759,6 +976,78 @@ const Dashboard = () => {
         {/* Tab Content */}
         {renderContent()}
       </div>
+
+      {/* Add Class Modal */}
+      <AddClassModal
+        key={classToEdit?.id || "add-new"}
+        isOpen={showAddClassModal}
+        onClose={() => {
+          setShowAddClassModal(false);
+          setClassToEdit(null);
+        }}
+        onSubmit={handleModalSubmit}
+        loading={actionLoading}
+        classToEdit={classToEdit}
+      />
+
+      {/* Delete Class Confirmation Modal */}
+      <ConfirmDeleteModal
+        isOpen={!!classToDelete}
+        onClose={() => setClassToDelete(null)}
+        onConfirm={handleConfirmDelete}
+        className={classToDelete?.name || ""}
+        loading={actionLoading}
+      />
+
+      {/* Add Student Modal */}
+      <AddStudentModal
+        isOpen={showAddStudentModal}
+        onClose={() => setShowAddStudentModal(false)}
+        onSubmit={handleAddStudent}
+        loading={actionLoading}
+      />
+
+      {/* Edit Student Modal */}
+      <AddStudentModal
+        isOpen={showEditStudentModal}
+        onClose={() => {
+          setShowEditStudentModal(false);
+          setStudentToEdit(null);
+        }}
+        onSubmit={handleEditStudentSubmit}
+        loading={actionLoading}
+        studentToEdit={studentToEdit}
+      />
+
+      {/* Add/Edit Quiz Modal */}
+      <AddQuizModal
+        isOpen={showAddQuizModal}
+        onClose={() => {
+          setShowAddQuizModal(false);
+          setQuizToEdit(null);
+        }}
+        onSubmit={quizToEdit ? handleEditQuiz : handleAddQuiz}
+        loading={actionLoading}
+        quizToEdit={quizToEdit}
+        classes={classes}
+      />
+
+      {/* Delete Quiz Confirmation Modal */}
+      <ConfirmDeleteModal
+        isOpen={!!quizToDelete}
+        onClose={() => setQuizToDelete(null)}
+        onConfirm={handleDeleteQuiz}
+        className={`quiz "${quizToDelete?.title || ""}"`}
+        loading={actionLoading}
+        type="quiz"
+      />
+
+      {/* Alert */}
+      <Alert
+        type={alert.type}
+        message={alert.message}
+        onClose={() => setAlert({ type: "", message: "" })}
+      />
     </div>
   );
 };
