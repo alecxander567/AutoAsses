@@ -1,5 +1,5 @@
 // src/pages/Dashboard.jsx
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FaUser,
@@ -26,9 +26,19 @@ import {
   FaChartLine,
   FaRocket,
   FaChalkboardTeacher,
+  FaArrowLeft,
+  FaFileImage,
+  FaCheck,
+  FaTrash,
+  FaExclamationTriangle,
+  FaClock,
+  FaGraduationCap,
+  FaChartPie,
+  FaStar,
 } from "react-icons/fa";
 import { useAuthActions } from "../hooks/useAuthActions";
 import { useClasses } from "../hooks/useClasses";
+import { useUploadAnswerKey } from "../hooks/useUploadAnswerKey";
 import AddClassModal from "../components/AddClassModal";
 import ClassCard from "../components/ClassCard";
 import ClassDetailsView from "../components/ClassDetailsView";
@@ -37,6 +47,7 @@ import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
 import Alert from "../components/Alert";
 import QuizCard from "../components/QuizCard";
 import AddQuizModal from "../components/AddQuizModal";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -71,10 +82,38 @@ const Dashboard = () => {
   const [deletingId, setDeletingId] = useState(null);
   const [classToDelete, setClassToDelete] = useState(null);
 
+  // State for viewing quiz details
+  const [selectedQuiz, setSelectedQuiz] = useState(null);
+
+  // State for image delete confirmation
+  const [showImageDeleteModal, setShowImageDeleteModal] = useState(false);
+  const [isDeletingImage, setIsDeletingImage] = useState(false);
+
+  // State for logout loading
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // Use the upload hook
+  const {
+    answerKeyUrl,
+    uploading,
+    deleting,
+    uploadAnswerKey,
+    deleteAnswerKey,
+    resetUpload,
+  } = useUploadAnswerKey();
+
+  const fileInputRef = useRef(null);
+
   const handleLogoutClick = async () => {
-    const result = await handleLogout();
-    if (result.success) {
-      navigate("/login");
+    setIsLoggingOut(true);
+    try {
+      const result = await handleLogout();
+      if (result.success) {
+        navigate("/login");
+      }
+    } catch (error) {
+      console.error("Logout error:", error);
+      setIsLoggingOut(false);
     }
   };
 
@@ -119,6 +158,17 @@ const Dashboard = () => {
 
   const handleBackToClasses = () => {
     setSelectedClassId(null);
+  };
+
+  const handleViewQuiz = (quiz) => {
+    setSelectedQuiz(quiz);
+    resetUpload();
+    setActiveTab("quiz-details");
+  };
+
+  const handleBackToQuizzes = () => {
+    setSelectedQuiz(null);
+    setActiveTab("quizzes");
   };
 
   const handleAddStudent = async (studentName, studentEmail) => {
@@ -215,6 +265,33 @@ const Dashboard = () => {
     }
     setQuizToDelete(null);
     return result;
+  };
+
+  // Image delete handlers
+  const handleImageDeleteClick = () => {
+    setShowImageDeleteModal(true);
+  };
+
+  const handleImageDeleteConfirm = async () => {
+    setIsDeletingImage(true);
+    try {
+      await deleteAnswerKey();
+      setShowImageDeleteModal(false);
+      setIsDeletingImage(false);
+      showAlert("success", "Image deleted successfully!");
+    } catch (error) {
+      console.error("Delete failed:", error);
+      setShowImageDeleteModal(false);
+      setIsDeletingImage(false);
+      showAlert(
+        "error",
+        `${error.message || "Failed to delete image. Please try again."}`,
+      );
+    }
+  };
+
+  const handleImageDeleteCancel = () => {
+    setShowImageDeleteModal(false);
   };
 
   // Calculate real stats from classes
@@ -345,15 +422,27 @@ const Dashboard = () => {
   ];
 
   if (authLoading || classesLoading) {
+    return <LoadingSpinner />;
+  }
+
+  // Show logout spinner
+  if (isLoggingOut) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-seashell-cream">
-        <FaSpinner className="animate-spin text-4xl text-emerald-600" />
+        <div className="text-center">
+          <FaSpinner className="animate-spin text-4xl text-emerald-600 mx-auto mb-4" />
+          <p className="text-emerald-700/70">Logging out...</p>
+        </div>
       </div>
     );
   }
 
   // Tab content renderer
   const renderContent = () => {
+    if (activeTab === "quiz-details" && selectedQuiz) {
+      return renderQuizDetails();
+    }
+
     switch (activeTab) {
       case "overview":
         return renderOverview();
@@ -366,6 +455,184 @@ const Dashboard = () => {
       default:
         return renderOverview();
     }
+  };
+
+  // Quiz Details View
+  const renderQuizDetails = () => {
+    const quiz = selectedQuiz;
+    const classData = getClassById(quiz.classId);
+    const students = classData?.students || [];
+
+    const handleFileChange = async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      try {
+        await uploadAnswerKey(file);
+        showAlert("success", "Image uploaded successfully!");
+      } catch (error) {
+        console.error("Upload failed:", error);
+        showAlert(
+          "error",
+          `${error.message || "Failed to upload image. Please try again."}`,
+        );
+      }
+
+      // Reset file input
+      event.target.value = null;
+    };
+
+    const handleUploadClick = () => {
+      fileInputRef.current?.click();
+    };
+
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
+        {/* Header with back button */}
+        <div className="flex items-center gap-4 mb-6">
+          <button
+            onClick={handleBackToQuizzes}
+            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition">
+            <FaArrowLeft />
+          </button>
+          <div>
+            <h2 className="text-2xl font-bold text-gray-800">{quiz.title}</h2>
+            {quiz.description && (
+              <p className="text-gray-500 text-sm mt-1">{quiz.description}</p>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left Panel - Students List */}
+          <div className="space-y-6">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <FaUsers className="text-ocean-blue" />
+                Students ({students.length})
+              </h3>
+              {students.length === 0 ?
+                <p className="text-sm text-gray-400 text-center py-4">
+                  No students in this class
+                </p>
+              : <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                  {students.map((student) => (
+                    <div
+                      key={student.id}
+                      className="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
+                          <FaEye className="text-emerald-600 text-sm" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-700">
+                            {student.name}
+                          </p>
+                          {student.email && (
+                            <p className="text-xs text-gray-400">
+                              {student.email}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-bold text-emerald-600">
+                          {student.avgScore ? `${student.avgScore}%` : "—"}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {student.quizzesTaken || 0} quizzes
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              }
+            </div>
+          </div>
+
+          {/* Right Panel - Upload Area */}
+          <div className="space-y-6">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <FaFileImage className="text-noon-warm" />
+                Answer Key Upload
+              </h3>
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
+              <div
+                onClick={handleUploadClick}
+                className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition bg-white">
+                {uploading ?
+                  <div className="flex flex-col items-center gap-3">
+                    <FaCloudUploadAlt className="text-emerald-500 text-4xl animate-bounce" />
+                    <p className="text-sm text-gray-600">Uploading...</p>
+                  </div>
+                : answerKeyUrl ?
+                  <div className="flex flex-col items-center gap-3">
+                    <FaCheck className="text-emerald-500 text-4xl" />
+                    <p className="text-sm font-medium text-emerald-600">
+                      Answer key uploaded
+                    </p>
+                    <img
+                      src={answerKeyUrl}
+                      alt="Answer key"
+                      className="max-h-40 rounded-lg shadow-sm"
+                    />
+                  </div>
+                : <div className="flex flex-col items-center gap-3">
+                    <FaCloudUploadAlt className="text-gray-400 text-4xl" />
+                    <p className="text-sm text-gray-600">
+                      Click to select an image from your computer
+                    </p>
+                    <p className="text-xs text-gray-400">PNG, JPG up to 10MB</p>
+                  </div>
+                }
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-3 mt-4">
+                {answerKeyUrl && (
+                  <button
+                    onClick={handleImageDeleteClick}
+                    disabled={deleting}
+                    className={`flex-1 bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition flex items-center justify-center gap-2 font-medium ${
+                      deleting ? "opacity-50 cursor-not-allowed" : ""
+                    }`}>
+                    {deleting ?
+                      <>
+                        <FaSpinner className="animate-spin" />
+                        Deleting...
+                      </>
+                    : <>
+                        <FaTrash />
+                        Delete Image
+                      </>
+                    }
+                  </button>
+                )}
+
+                <button
+                  onClick={() => {
+                    showAlert("success", `Checking quiz: ${quiz.title}`);
+                  }}
+                  className={`${answerKeyUrl ? "flex-1" : "w-full"} bg-gradient-to-r from-emerald-600 to-emerald-500 text-white px-4 py-2 rounded-lg hover:shadow-lg transition-all flex items-center justify-center gap-2 font-medium`}>
+                  <FaCheck className="text-sm" />
+                  Check
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // Overview Tab
@@ -385,35 +652,50 @@ const Dashboard = () => {
           <p className="text-xl sm:text-2xl font-bold text-noon-warm">
             {stats.pendingChecks}
           </p>
-          <p className="text-xs text-noon-warm">⏳ Waiting for review</p>
+          <p className="text-xs text-noon-warm">
+            <FaClock className="inline mr-1" />
+            Waiting for review
+          </p>
         </div>
         <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
           <p className="text-xs sm:text-sm text-gray-500">Completed</p>
           <p className="text-xl sm:text-2xl font-bold text-emerald-600">
             {stats.completedChecks}
           </p>
-          <p className="text-xs text-emerald-600">✅ All checked</p>
+          <p className="text-xs text-emerald-600">
+            <FaCheck className="inline mr-1" />
+            All checked
+          </p>
         </div>
         <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-ocean-blue/30">
           <p className="text-xs sm:text-sm text-gray-500">Accuracy Rate</p>
           <p className="text-xl sm:text-2xl font-bold text-ocean-blue">
             {stats.accuracyRate}%
           </p>
-          <p className="text-xs text-ocean-blue">📈 Up 2.5%</p>
+          <p className="text-xs text-ocean-blue">
+            <FaChartLine className="inline mr-1" />
+            Up 2.5%
+          </p>
         </div>
         <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-purple-200">
           <p className="text-xs sm:text-sm text-gray-500">Students</p>
           <p className="text-xl sm:text-2xl font-bold text-purple-600">
             {stats.totalStudents}
           </p>
-          <p className="text-xs text-purple-600">👨‍🎓 Active</p>
+          <p className="text-xs text-purple-600">
+            <FaGraduationCap className="inline mr-1" />
+            Active
+          </p>
         </div>
         <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-pink-200">
           <p className="text-xs sm:text-sm text-gray-500">Avg. Score</p>
           <p className="text-xl sm:text-2xl font-bold text-pink-600">
             {stats.averageScore.toFixed(1)}%
           </p>
-          <p className="text-xs text-pink-600">📊 Class average</p>
+          <p className="text-xs text-pink-600">
+            <FaChartPie className="inline mr-1" />
+            Class average
+          </p>
         </div>
       </div>
 
@@ -521,9 +803,7 @@ const Dashboard = () => {
                         "bg-emerald-100 text-emerald-700"
                       : "bg-noon-warm/20 text-noon-warm"
                     }`}>
-                    {activity.status === "completed" ?
-                      "✅ Completed"
-                    : "⏳ Pending"}
+                    {activity.status === "completed" ? "Completed" : "Pending"}
                   </span>
                 </div>
               ))}
@@ -619,7 +899,6 @@ const Dashboard = () => {
 
   // Quizzes Tab
   const renderQuizzes = () => {
-    // Get all quizzes from all classes
     const allQuizzes = [];
     classes.forEach((cls) => {
       (cls.quizzes || []).forEach((quiz) => {
@@ -632,7 +911,6 @@ const Dashboard = () => {
       });
     });
 
-    // Sort quizzes by creation date (newest first)
     const sortedQuizzes = allQuizzes.sort(
       (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
     );
@@ -694,9 +972,7 @@ const Dashboard = () => {
                       title: quiz.title,
                     });
                   }}
-                  onView={(quiz) => {
-                    showAlert("info", `Viewing quiz: ${quiz.title}`);
-                  }}
+                  onView={handleViewQuiz}
                   loading={actionLoading}
                 />
               ))}
@@ -727,7 +1003,6 @@ const Dashboard = () => {
 
     return (
       <div className="space-y-6">
-        {/* Classes Section */}
         <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
           <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
             <h3 className="font-bold text-gray-800 flex items-center gap-2">
@@ -790,22 +1065,34 @@ const Dashboard = () => {
           <p className="text-2xl font-bold text-emerald-900">
             {stats.averageScore.toFixed(1)}%
           </p>
-          <p className="text-xs text-emerald-600">↑ 3.2% this month</p>
+          <p className="text-xs text-emerald-600">
+            <FaChartLine className="inline mr-1" />
+            Up 3.2% this month
+          </p>
         </div>
         <div className="bg-white rounded-xl p-4 shadow-sm border border-noon-warm/30">
           <p className="text-xs sm:text-sm text-gray-500">Pass Rate</p>
           <p className="text-2xl font-bold text-noon-warm">78.5%</p>
-          <p className="text-xs text-noon-warm">↑ 5.1% this month</p>
+          <p className="text-xs text-noon-warm">
+            <FaChartLine className="inline mr-1" />
+            Up 5.1% this month
+          </p>
         </div>
         <div className="bg-white rounded-xl p-4 shadow-sm border border-ocean-blue/30">
           <p className="text-xs sm:text-sm text-gray-500">Total Submissions</p>
           <p className="text-2xl font-bold text-ocean-blue">1,247</p>
-          <p className="text-xs text-ocean-blue">↑ 12.8% this month</p>
+          <p className="text-xs text-ocean-blue">
+            <FaChartLine className="inline mr-1" />
+            Up 12.8% this month
+          </p>
         </div>
         <div className="bg-white rounded-xl p-4 shadow-sm border border-purple-200">
           <p className="text-xs sm:text-sm text-gray-500">Top Performer</p>
           <p className="text-lg font-bold text-purple-600">Student 5</p>
-          <p className="text-xs text-purple-600">⭐ 97.5% average</p>
+          <p className="text-xs text-purple-600">
+            <FaStar className="inline mr-1" />
+            97.5% average
+          </p>
         </div>
       </div>
 
@@ -840,7 +1127,8 @@ const Dashboard = () => {
           <div className="space-y-3">
             <div className="p-3 bg-gradient-to-r from-emerald-50 to-seashell-cream rounded-lg border border-emerald-100/50">
               <p className="text-sm font-medium text-gray-800">
-                📊 Top Performer Trend
+                <FaChartLine className="inline mr-2 text-emerald-600" />
+                Top Performer Trend
               </p>
               <p className="text-xs text-gray-600 mt-1">
                 Students are showing 15% improvement after using AI-powered
@@ -849,7 +1137,8 @@ const Dashboard = () => {
             </div>
             <div className="p-3 bg-gradient-to-r from-noon-warm/10 to-noon-sun/10 rounded-lg border border-noon-warm/30">
               <p className="text-sm font-medium text-gray-800">
-                ⚠️ Common Mistakes
+                <FaExclamationTriangle className="inline mr-2 text-noon-warm" />
+                Common Mistakes
               </p>
               <p className="text-xs text-gray-600 mt-1">
                 Most students struggle with questions 3 and 7 in Algebra Basics
@@ -857,7 +1146,8 @@ const Dashboard = () => {
             </div>
             <div className="p-3 bg-gradient-to-r from-ocean-blue/10 to-blue-100/20 rounded-lg border border-ocean-blue/30">
               <p className="text-sm font-medium text-gray-800">
-                💡 Recommendation
+                <FaRocket className="inline mr-2 text-ocean-blue" />
+                Recommendation
               </p>
               <p className="text-xs text-gray-600 mt-1">
                 Consider reviewing Chapter 5 before the final exam
@@ -915,9 +1205,18 @@ const Dashboard = () => {
               </div>
               <button
                 onClick={handleLogoutClick}
-                className="flex items-center gap-1 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm text-red-600 hover:bg-red-50 rounded-lg transition">
-                <FaSignOutAlt />
-                <span className="hidden sm:inline">Logout</span>
+                disabled={isLoggingOut}
+                className="flex items-center gap-1 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm text-red-600 hover:bg-red-50 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
+                {isLoggingOut ?
+                  <>
+                    <FaSpinner className="animate-spin" />
+                    <span className="hidden sm:inline">Logging out...</span>
+                  </>
+                : <>
+                    <FaSignOutAlt />
+                    <span className="hidden sm:inline">Logout</span>
+                  </>
+                }
               </button>
             </div>
           </div>
@@ -926,58 +1225,80 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 py-4 sm:py-8">
-        {/* Welcome Banner */}
-        <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-4 sm:p-6 mb-6 sm:mb-8 text-white relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24"></div>
-          <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full -ml-16 -mb-16"></div>
-          <div className="relative z-10">
-            <h2 className="text-lg sm:text-2xl font-bold">
-              Welcome back, {user?.displayName?.split(" ")[0] || "Teacher"}! 👋
-            </h2>
-            <p className="text-emerald-100 text-xs sm:text-sm mt-1">
-              You have {stats.pendingChecks} pending checks to review. Ready to
-              grade some papers?
-            </p>
-            <div className="flex flex-wrap gap-2 sm:gap-3 mt-3">
-              <button className="bg-white/20 backdrop-blur-sm text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-white/30 transition flex items-center gap-2">
-                <FaUpload className="text-sm" />
-                Upload New Quiz
-              </button>
-              <button className="bg-white/20 backdrop-blur-sm text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-white/30 transition flex items-center gap-2">
-                <FaRobot className="text-sm" />
-                AI Summary
-              </button>
+        {/* Welcome Banner - Hide when viewing quiz details */}
+        {activeTab !== "quiz-details" && (
+          <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-4 sm:p-6 mb-6 sm:mb-8 text-white relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24"></div>
+            <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full -ml-16 -mb-16"></div>
+            <div className="relative z-10">
+              <h2 className="text-lg sm:text-2xl font-bold">
+                Welcome back, {user?.displayName?.split(" ")[0] || "Teacher"}!
+              </h2>
+              <p className="text-emerald-100 text-xs sm:text-sm mt-1">
+                You have {stats.pendingChecks} pending checks to review. Ready
+                to grade some papers?
+              </p>
+              <div className="flex flex-wrap gap-2 sm:gap-3 mt-3">
+                <button className="bg-white/20 backdrop-blur-sm text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-white/30 transition flex items-center gap-2">
+                  <FaUpload className="text-sm" />
+                  Upload New Quiz
+                </button>
+                <button className="bg-white/20 backdrop-blur-sm text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-white/30 transition flex items-center gap-2">
+                  <FaRobot className="text-sm" />
+                  AI Summary
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Navigation Tabs */}
-        <div className="flex flex-wrap gap-1 sm:gap-2 mb-6 sm:mb-8 bg-white rounded-xl p-1 shadow-sm border border-emerald-100/50">
-          {[
-            { id: "overview", label: "Overview", icon: FaHome },
-            { id: "quizzes", label: "Quizzes", icon: FaBook },
-            { id: "students", label: "Students", icon: FaUsers },
-            { id: "analytics", label: "Analytics", icon: FaChartLine },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex-1 flex items-center justify-center gap-1 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition ${
-                activeTab === tab.id ?
-                  "bg-emerald-600 text-white shadow-md"
-                : "text-gray-600 hover:bg-gray-100"
-              }`}>
-              <tab.icon className="text-sm sm:text-base" />
-              <span className="hidden xs:inline">{tab.label}</span>
-            </button>
-          ))}
-        </div>
+        {/* Navigation Tabs - Hide when viewing quiz details */}
+        {activeTab !== "quiz-details" ?
+          <div className="flex flex-wrap gap-1 sm:gap-2 mb-6 sm:mb-8 bg-white rounded-xl p-1 shadow-sm border border-emerald-100/50">
+            {[
+              { id: "overview", label: "Overview", icon: FaHome },
+              { id: "quizzes", label: "Quizzes", icon: FaBook },
+              { id: "students", label: "Students", icon: FaUsers },
+              { id: "analytics", label: "Analytics", icon: FaChartLine },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex-1 flex items-center justify-center gap-1 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition ${
+                  activeTab === tab.id ?
+                    "bg-emerald-600 text-white shadow-md"
+                  : "text-gray-600 hover:bg-gray-100"
+                }`}>
+                <tab.icon className="text-sm sm:text-base" />
+                <span className="hidden xs:inline">{tab.label}</span>
+              </button>
+            ))}
+          </div>
+        : null}
 
         {/* Tab Content */}
         {renderContent()}
       </div>
 
-      {/* Add Class Modal */}
+      {/* Alert Component */}
+      <Alert
+        type={alert.type}
+        message={alert.message}
+        onClose={() => setAlert({ type: "", message: "" })}
+        duration={3000}
+      />
+
+      {/* Image Delete Confirmation Modal */}
+      <ConfirmDeleteModal
+        isOpen={showImageDeleteModal}
+        onClose={handleImageDeleteCancel}
+        onConfirm={handleImageDeleteConfirm}
+        className="Answer Key Image"
+        loading={isDeletingImage}
+        type="image"
+      />
+
+      {/* Modals */}
       <AddClassModal
         key={classToEdit?.id || "add-new"}
         isOpen={showAddClassModal}
@@ -990,16 +1311,15 @@ const Dashboard = () => {
         classToEdit={classToEdit}
       />
 
-      {/* Delete Class Confirmation Modal */}
       <ConfirmDeleteModal
         isOpen={!!classToDelete}
         onClose={() => setClassToDelete(null)}
         onConfirm={handleConfirmDelete}
         className={classToDelete?.name || ""}
         loading={actionLoading}
+        type="class"
       />
 
-      {/* Add Student Modal */}
       <AddStudentModal
         isOpen={showAddStudentModal}
         onClose={() => setShowAddStudentModal(false)}
@@ -1007,7 +1327,6 @@ const Dashboard = () => {
         loading={actionLoading}
       />
 
-      {/* Edit Student Modal */}
       <AddStudentModal
         isOpen={showEditStudentModal}
         onClose={() => {
@@ -1019,7 +1338,6 @@ const Dashboard = () => {
         studentToEdit={studentToEdit}
       />
 
-      {/* Add/Edit Quiz Modal */}
       <AddQuizModal
         isOpen={showAddQuizModal}
         onClose={() => {
@@ -1032,7 +1350,6 @@ const Dashboard = () => {
         classes={classes}
       />
 
-      {/* Delete Quiz Confirmation Modal */}
       <ConfirmDeleteModal
         isOpen={!!quizToDelete}
         onClose={() => setQuizToDelete(null)}
@@ -1040,13 +1357,6 @@ const Dashboard = () => {
         className={`quiz "${quizToDelete?.title || ""}"`}
         loading={actionLoading}
         type="quiz"
-      />
-
-      {/* Alert */}
-      <Alert
-        type={alert.type}
-        message={alert.message}
-        onClose={() => setAlert({ type: "", message: "" })}
       />
     </div>
   );
