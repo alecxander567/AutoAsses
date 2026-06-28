@@ -1,5 +1,5 @@
 // src/components/AddQuizModal.jsx
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { FaTimes, FaQuestionCircle, FaEdit } from "react-icons/fa";
 
 const AddQuizModal = ({
@@ -11,36 +11,22 @@ const AddQuizModal = ({
   classId = null,
   classes = [],
 }) => {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [date, setDate] = useState("");
-  const [totalQuestions, setTotalQuestions] = useState(10);
+  const today = new Date().toISOString().split("T")[0];
+
+  // State is initialized directly from props instead of being synced via
+  // a useEffect. The parent remounts this component with a fresh `key`
+  // whenever quizToEdit changes (see Dashboard.jsx), so these initializers
+  // always run against the correct quiz/class without any extra effect.
+  const [title, setTitle] = useState(quizToEdit?.title || "");
+  const [description, setDescription] = useState(quizToEdit?.description || "");
+  const [date, setDate] = useState(quizToEdit?.date || today);
+  const [totalQuestions, setTotalQuestions] = useState(
+    quizToEdit?.totalQuestions || 10,
+  );
   const [selectedClassId, setSelectedClassId] = useState(classId || "");
   const [error, setError] = useState("");
 
   const isEditMode = !!quizToEdit;
-
-  // Reset form when modal opens/closes or quiz changes
-  useEffect(() => {
-    if (isOpen) {
-      // Reset all fields first
-      setTitle("");
-      setDescription("");
-      setDate(new Date().toISOString().split("T")[0]);
-      setTotalQuestions(10);
-      setSelectedClassId(classId || "");
-      setError("");
-
-      // If editing, populate with quiz data
-      if (quizToEdit) {
-        setTitle(quizToEdit.title || "");
-        setDescription(quizToEdit.description || "");
-        setDate(quizToEdit.date || new Date().toISOString().split("T")[0]);
-        setTotalQuestions(quizToEdit.totalQuestions || 10);
-        setSelectedClassId(classId || "");
-      }
-    }
-  }, [isOpen, quizToEdit, classId]);
 
   if (!isOpen) return null;
 
@@ -66,13 +52,9 @@ const AddQuizModal = ({
     });
 
     if (result && result.success) {
-      // Reset form after successful submission
-      setTitle("");
-      setDescription("");
-      setDate(new Date().toISOString().split("T")[0]);
-      setTotalQuestions(10);
-      setSelectedClassId(classId || "");
-      setError("");
+      // No need to manually reset fields here -- onClose() below clears
+      // quizToEdit/closes the modal in the parent, and the next time it
+      // opens, the changed `key` remounts this component fresh.
       onClose();
     } else if (result && result.error) {
       setError(result.error);
@@ -80,12 +62,6 @@ const AddQuizModal = ({
   };
 
   const handleClose = () => {
-    setTitle("");
-    setDescription("");
-    setDate(new Date().toISOString().split("T")[0]);
-    setTotalQuestions(10);
-    setSelectedClassId(classId || "");
-    setError("");
     onClose();
   };
 

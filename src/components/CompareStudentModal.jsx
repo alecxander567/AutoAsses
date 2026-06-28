@@ -1,5 +1,5 @@
 // src/components/CompareStudentModal.jsx
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import {
   FaTimes,
   FaUpload,
@@ -14,7 +14,7 @@ import {
   FaGraduationCap,
   FaChartPie,
 } from "react-icons/fa";
-import { createWorker } from "tesseract.js";
+import { compareAnswersWithGemini } from "../services/googleAIService";
 
 const CompareStudentModal = ({
   isOpen,
@@ -31,172 +31,10 @@ const CompareStudentModal = ({
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
-  // Reuse a single Tesseract worker for the lifetime of the modal instead
-  // of spinning up + tearing down a new one on every comparison. Creating
-  // a worker reloads the OCR engine and language data, which is slow and
-  // unnecessary to repeat for two recognitions back-to-back.
-  const workerRef = useRef(null);
-
-  useEffect(() => {
-    // Only create the worker once the modal is actually open, so we don't
-    // pay the startup cost for every modal instance mounted in the tree.
-    if (isOpen && !workerRef.current) {
-      (async () => {
-        try {
-          const worker = await createWorker("eng");
-          // Restrict recognized characters to digits, A-D, and the
-          // punctuation that separates question number from answer
-          // (".", ")", space). This meaningfully reduces misreads versus
-          // letting Tesseract guess across its full character set.
-          await worker.setParameters({
-            tessedit_char_whitelist: "0123456789ABCD.) ",
-            // PSM 6 = "Assume a single uniform block of text". This is
-            // the setting that actually matters: the previous code used
-            // Tesseract's default page-segmentation mode, which tries to
-            // detect multi-column/multi-block layouts and badly mangles
-            // a simple list of "1. B" style lines, merging rows together
-            // or dropping them. PSM 6 reads it as one block, top to
-            // bottom, line by line -- which matches the real layout.
-            tessedit_pageseg_mode: "6",
-          });
-          workerRef.current = worker;
-        } catch (err) {
-          console.error("Failed to initialize OCR worker:", err);
-        }
-      })();
-    }
-
-    // Tear down the worker when the modal closes/unmounts so we don't
-    // leak a Tesseract worker thread per modal open.
-    return () => {
-      if (!isOpen && workerRef.current) {
-        workerRef.current.terminate();
-        workerRef.current = null;
-      }
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    return () => {
-      if (workerRef.current) {
-        workerRef.current.terminate();
-        workerRef.current = null;
-      }
-    };
-  }, []);
-
-  // OCR and comparison functions
-  const extractTextFromImage = async (imageSource) => {
-    try {
-      if (!workerRef.current) {
-        workerRef.current = await createWorker("eng");
-        await workerRef.current.setParameters({
-          tessedit_char_whitelist: "0123456789ABCD.) ",
-          tessedit_pageseg_mode: "6",
-        });
-      }
-      const {
-        data: { text },
-      } = await workerRef.current.recognize(imageSource);
-      return text;
-    } catch (err) {
-      console.error("OCR Error:", err);
-    }
-  };
-
-  const parseAnswers = (text) => {
-    const answers = {};
-    const lines = text.split("\n");
-
-    for (const line of lines) {
-      // Look for patterns like "1. A", "1 A", "1) A", etc. We deliberately
-      // do NOT require the line to end right after the letter (no `$`
-      // anchor) -- OCR frequently appends a stray trailing character after
-      // a correctly-read letter (e.g. "C" misread as "Cc", or leftover
-      // noise from a smudge/compression artifact). Anchoring the end of
-      // the match meant a single stray trailing character caused the
-      // *entire* line to fail to match, silently dropping an otherwise
-      // correctly-read answer. We only care about the first A-D character
-      // immediately following the question number.
-      const match = line.match(/^\s*(\d{1,2})[.):]?\s*([A-D])/i);
-      if (match) {
-        const questionNumber = parseInt(match[1], 10);
-        answers[questionNumber] = match[2].toUpperCase();
-        continue;
-      }
-
-      // A line with just a question number and no letter at all (e.g.
-      // "10." with nothing after it) means the question was left blank.
-      // We still want to record that explicitly as `null` rather than
-      // leave it missing, so compareAnswers can tell "left blank" apart
-      // from "this line wasn't found by OCR at all".
-      const blankMatch = line.match(/^\s*(\d{1,2})[.):]?\s*$/);
-      if (blankMatch) {
-        answers[parseInt(blankMatch[1], 10)] = null;
-      }
-    }
-
-    return answers;
-  };
-
-  const compareAnswers = (answerKeyText, studentAnswersText) => {
-    const answerKeyMap = parseAnswers(answerKeyText);
-    const studentAnswerMap = parseAnswers(studentAnswersText);
-
-    // Only count questions that actually exist on the answer key. We
-    // deliberately iterate over the KEY's questions, not the student's --
-    // the previous version counted `total` based on how many lines the
-    // student's OCR pass produced, which meant a question the student
-    // left blank (and therefore didn't appear in their parsed answers at
-    // all) was silently excluded from the denominator instead of being
-    // counted as wrong. That inflated scores for incomplete sheets.
-    const questionNumbers = Object.keys(answerKeyMap)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    if (questionNumbers.length === 0) {
-      throw new Error(
-        'Could not read any answers from the answer key image. Make sure it\'s a clear photo of the typed answer list (e.g. "1. B", "2. D", ...).',
-      );
-    }
-
-    let correct = 0;
-    let total = 0;
-    const details = [];
-
-    questionNumbers.forEach((questionNumber) => {
-      const correctAnswer = answerKeyMap[questionNumber];
-      if (!correctAnswer) {
-        // The key itself doesn't have a usable answer for this question
-        // (OCR couldn't read a letter for it) -- skip rather than penalize
-        // the student for an unreadable key.
-        return;
-      }
-
-      total++;
-      const studentAnswer = studentAnswerMap[questionNumber] ?? null;
-      const isCorrect = studentAnswer === correctAnswer;
-      if (isCorrect) correct++;
-
-      details.push({
-        questionNumber,
-        studentAnswer, // may be null, meaning left blank / unreadable
-        correctAnswer,
-        isCorrect,
-      });
-    });
-
-    const score = total > 0 ? Math.round((correct / total) * 100) : 0;
-    const grade = getGrade(score);
-
-    return {
-      score,
-      correct,
-      total,
-      details,
-      grade,
-    };
-  };
+  // NOTE: OCR (Tesseract) has been removed entirely. Gemini Vision reads
+  // both images directly and does extraction + comparison in one call,
+  // which handles handwriting far better than Tesseract's printed-text
+  // model ever could. See googleAIService.compareAnswersWithGemini.
 
   const getGrade = (score) => {
     if (score >= 90)
@@ -239,13 +77,11 @@ const CompareStudentModal = ({
     const file = event.target.files[0];
     if (!file) return;
 
-    // Validate file type
     if (!file.type.startsWith("image/")) {
       setError("Please select an image file (PNG, JPG, etc.)");
       return;
     }
 
-    // Validate file size (max 10MB)
     if (file.size > 10 * 1024 * 1024) {
       setError("File size exceeds 10MB limit");
       return;
@@ -255,7 +91,6 @@ const CompareStudentModal = ({
     setError(null);
     setResult(null);
 
-    // Create preview
     const reader = new FileReader();
     reader.onloadend = () => {
       setPreviewUrl(reader.result);
@@ -278,15 +113,12 @@ const CompareStudentModal = ({
       return;
     }
 
-    // BUG FIX: the previous version never called setComparing(true), so
-    // the "Comparing..." spinner state was dead code -- the button never
-    // visually reflected that work was happening, even though the OCR
-    // calls below can take several seconds each.
     setComparing(true);
     setError(null);
 
     try {
-      // Fetch the answer key image from Cloudinary
+      // Fetch the answer key image from Cloudinary so we have a File
+      // object to hand to Gemini, same as before.
       const answerKeyResponse = await fetch(answerKeyUrl);
       if (!answerKeyResponse.ok) {
         throw new Error("Could not load the answer key image.");
@@ -296,19 +128,30 @@ const CompareStudentModal = ({
         type: answerKeyBlob.type || "image/jpeg",
       });
 
-      // Extract text from both images using OCR
-      const answerKeyText = await extractTextFromImage(answerKeyFile);
-      const studentSheetText = await extractTextFromImage(studentSheetFile);
+      const geminiResult = await compareAnswersWithGemini(
+        answerKeyFile,
+        studentSheetFile,
+      );
 
-      // Surfacing the raw OCR text in the console is deliberate: if
-      // grading looks wrong, the fastest way to tell "OCR misread a
-      // letter" apart from "comparison logic bug" is to see exactly what
-      // text Tesseract extracted.
-      // Compare the answers
-      const comparison = compareAnswers(answerKeyText, studentSheetText);
+      // compareAnswersWithGemini can come back undefined if Gemini's
+      // response wasn't valid JSON (logged inside the service). Guard
+      // against that instead of crashing on `.score`.
+      if (!geminiResult || typeof geminiResult.score !== "number") {
+        throw new Error(
+          "Could not read the answer sheets clearly. Please try a clearer photo.",
+        );
+      }
+
+      const comparison = {
+        score: geminiResult.score,
+        correct: geminiResult.correct,
+        total: geminiResult.total,
+        details: geminiResult.details || [],
+        grade: getGrade(geminiResult.score),
+      };
+
       setResult(comparison);
 
-      // Call the parent callback with the score
       if (onCompareComplete) {
         onCompareComplete(comparison.score, comparison.details);
       }
@@ -426,7 +269,7 @@ const CompareStudentModal = ({
                         <li>
                           <span className="font-medium">Image quality:</span>{" "}
                           Use a clear, well-lit, flat photo. Blurry or skewed
-                          images reduce OCR accuracy.
+                          images reduce accuracy.
                         </li>
                       </ul>
                     </div>

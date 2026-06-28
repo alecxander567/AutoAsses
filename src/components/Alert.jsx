@@ -48,7 +48,7 @@ const Alert = ({ type, message, onClose, duration = 2000 }) => {
 
   return (
     <div
-      className={`fixed inset-0 z-[9999] flex items-center justify-center pointer-events-none ${
+      className={`fixed inset-0 z-[9999] flex items-center justify-center px-4 pointer-events-none ${
         isVisible || isExiting ? "pointer-events-auto" : ""
       }`}>
       {/* Backdrop */}
@@ -61,14 +61,14 @@ const Alert = ({ type, message, onClose, duration = 2000 }) => {
 
       {/* Alert Modal */}
       <div
-        className={`relative transform transition-all duration-300 ${
+        className={`relative w-full max-w-md transform transition-all duration-300 ${
           isVisible ?
             "scale-100 opacity-100 translate-y-0"
           : "scale-95 opacity-0 translate-y-4"
         } ${isExiting ? "scale-95 opacity-0 translate-y-4" : ""}`}
         role="alert">
         <div
-          className={`flex items-start gap-3 px-6 py-5 rounded-2xl border shadow-2xl ${bgColor} max-w-md w-full mx-4`}>
+          className={`flex items-start gap-3 px-6 py-5 rounded-2xl border shadow-2xl ${bgColor} w-full`}>
           <div className={`flex-shrink-0 mt-0.5 ${iconColor}`}>
             <IconComponent className="text-2xl" />
           </div>

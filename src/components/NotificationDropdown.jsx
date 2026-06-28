@@ -136,6 +136,89 @@ const NotificationDropdown = ({ classes }) => {
     }
   };
 
+  const panelContent = (
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <div className="flex items-center gap-2">
+          <FaBell className="text-emerald-600" />
+          <h3 className="font-semibold text-gray-800">Notifications</h3>
+          {unreadCount > 0 && (
+            <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">
+              {unreadCount} new
+            </span>
+          )}
+        </div>
+        {unreadCount > 0 && (
+          <button
+            onClick={markAllAsRead}
+            className="text-xs text-emerald-600 hover:text-emerald-800 font-medium">
+            Mark all read
+          </button>
+        )}
+      </div>
+
+      {/* Notification List */}
+      <div className="max-h-96 overflow-y-auto">
+        {notifications.length === 0 ?
+          <div className="flex flex-col items-center justify-center py-8 px-4">
+            <FaBell className="text-4xl text-gray-300 mb-2" />
+            <p className="text-sm text-gray-500">No notifications</p>
+            <p className="text-xs text-gray-400 mt-1">You're all caught up!</p>
+          </div>
+        : notifications.map((notification) => {
+            const isRead = readIds.has(notification.id);
+            return (
+              <button
+                key={notification.id}
+                onClick={() => handleNotificationClick(notification)}
+                className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition border-b border-gray-50 last:border-b-0 flex items-start gap-3 ${
+                  !isRead ? "bg-emerald-50/30" : ""
+                } ${getNotificationColor(notification.type)}`}>
+                <div className="flex-shrink-0 mt-0.5">
+                  {getNotificationIcon(notification.type)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p
+                      className={`text-sm font-medium ${!isRead ? "text-gray-800" : "text-gray-600"}`}>
+                      {notification.title}
+                    </p>
+                    {!isRead && (
+                      <span className="flex-shrink-0 w-2 h-2 bg-emerald-500 rounded-full" />
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {notification.description}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {notification.className} • {notification.date}
+                  </p>
+                </div>
+              </button>
+            );
+          })
+        }
+      </div>
+
+      {/* Footer */}
+      {notifications.length > 0 && (
+        <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
+          <button
+            onClick={() => {
+              if (window.setActiveTabFromNotification) {
+                window.setActiveTabFromNotification("quizzes");
+              }
+              setIsOpen(false);
+            }}
+            className="text-xs text-emerald-600 hover:text-emerald-800 font-medium w-full text-center">
+            View all quizzes
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="relative" ref={dropdownRef}>
       {/* Bell Button */}
@@ -151,90 +234,29 @@ const NotificationDropdown = ({ classes }) => {
         )}
       </button>
 
-      {/* Dropdown */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden z-50">
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <div className="flex items-center gap-2">
-              <FaBell className="text-emerald-600" />
-              <h3 className="font-semibold text-gray-800">Notifications</h3>
-              {unreadCount > 0 && (
-                <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">
-                  {unreadCount} new
-                </span>
-              )}
+        <>
+          {/* Mobile: fixed full-viewport overlay, panel centered in it.
+              A button anchored near the top-right of a narrow screen can't
+              fit a 320-384px wide absolutely-positioned dropdown without
+              clipping off-screen, so below the `sm` breakpoint we render a
+              centered fixed panel instead of an anchored one. */}
+          <div className="sm:hidden fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div
+              className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+              onClick={() => setIsOpen(false)}
+            />
+            <div className="relative w-full max-w-sm bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden">
+              {panelContent}
             </div>
-            {unreadCount > 0 && (
-              <button
-                onClick={markAllAsRead}
-                className="text-xs text-emerald-600 hover:text-emerald-800 font-medium">
-                Mark all read
-              </button>
-            )}
           </div>
 
-          {/* Notification List */}
-          <div className="max-h-96 overflow-y-auto">
-            {notifications.length === 0 ?
-              <div className="flex flex-col items-center justify-center py-8 px-4">
-                <FaBell className="text-4xl text-gray-300 mb-2" />
-                <p className="text-sm text-gray-500">No notifications</p>
-                <p className="text-xs text-gray-400 mt-1">
-                  You're all caught up!
-                </p>
-              </div>
-            : notifications.map((notification) => {
-                const isRead = readIds.has(notification.id);
-                return (
-                  <button
-                    key={notification.id}
-                    onClick={() => handleNotificationClick(notification)}
-                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 transition border-b border-gray-50 last:border-b-0 flex items-start gap-3 ${
-                      !isRead ? "bg-emerald-50/30" : ""
-                    } ${getNotificationColor(notification.type)}`}>
-                    <div className="flex-shrink-0 mt-0.5">
-                      {getNotificationIcon(notification.type)}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p
-                          className={`text-sm font-medium ${!isRead ? "text-gray-800" : "text-gray-600"}`}>
-                          {notification.title}
-                        </p>
-                        {!isRead && (
-                          <span className="flex-shrink-0 w-2 h-2 bg-emerald-500 rounded-full" />
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        {notification.description}
-                      </p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        {notification.className} • {notification.date}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })
-            }
+          {/* Desktop/tablet (sm and up): original anchored dropdown,
+              positioned relative to the bell button. */}
+          <div className="hidden sm:block absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden z-50">
+            {panelContent}
           </div>
-
-          {/* Footer */}
-          {notifications.length > 0 && (
-            <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
-              <button
-                onClick={() => {
-                  if (window.setActiveTabFromNotification) {
-                    window.setActiveTabFromNotification("quizzes");
-                  }
-                  setIsOpen(false);
-                }}
-                className="text-xs text-emerald-600 hover:text-emerald-800 font-medium w-full text-center">
-                View all quizzes
-              </button>
-            </div>
-          )}
-        </div>
+        </>
       )}
     </div>
   );

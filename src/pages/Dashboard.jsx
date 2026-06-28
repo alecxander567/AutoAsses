@@ -1192,6 +1192,7 @@ const Dashboard = () => {
       />
 
       <AddQuizModal
+        key={quizToEdit?.id || "add-new"}
         isOpen={showAddQuizModal}
         onClose={() => {
           setShowAddQuizModal(false);
