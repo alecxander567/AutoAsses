@@ -236,23 +236,18 @@ const NotificationDropdown = ({ classes }) => {
 
       {isOpen && (
         <>
-          {/* Mobile: fixed full-viewport overlay, panel centered in it.
-              A button anchored near the top-right of a narrow screen can't
-              fit a 320-384px wide absolutely-positioned dropdown without
-              clipping off-screen, so below the `sm` breakpoint we render a
-              centered fixed panel instead of an anchored one. */}
-          <div className="sm:hidden fixed inset-0 z-50 flex items-center justify-center px-4">
+          {/* Mobile: centered panel with top spacing to avoid overlapping */}
+          <div className="sm:hidden fixed inset-0 z-50 flex items-start justify-center px-4 pt-16">
             <div
               className="absolute inset-0 bg-black/30 backdrop-blur-sm"
               onClick={() => setIsOpen(false)}
             />
-            <div className="relative w-full max-w-sm bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden">
+            <div className="relative w-full max-w-sm bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden max-h-[80vh]">
               {panelContent}
             </div>
           </div>
 
-          {/* Desktop/tablet (sm and up): original anchored dropdown,
-              positioned relative to the bell button. */}
+          {/* Desktop/tablet (sm and up): original anchored dropdown */}
           <div className="hidden sm:block absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden z-50">
             {panelContent}
           </div>
