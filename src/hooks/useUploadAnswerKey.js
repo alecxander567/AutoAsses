@@ -21,15 +21,6 @@ export const useUploadAnswerKey = () => {
       const apiKey =
         import.meta.env.VITE_CLOUDINARY_API_KEY || "264177562313129";
 
-      console.log("Uploading to Cloudinary:", {
-        cloudName,
-        uploadPreset,
-        apiKey: apiKey ? "Present" : "Missing",
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type,
-      });
-
       const formData = new FormData();
       formData.append("file", file);
       formData.append("upload_preset", uploadPreset);
@@ -42,8 +33,6 @@ export const useUploadAnswerKey = () => {
           body: formData,
         },
       );
-
-      console.log("Response status:", response.status);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -65,7 +54,6 @@ export const useUploadAnswerKey = () => {
       }
 
       const data = await response.json();
-      console.log("Upload success:", data);
 
       if (data.secure_url) {
         setAnswerKeyUrl(data.secure_url);
@@ -148,7 +136,6 @@ export const useUploadAnswerKey = () => {
       }
 
       const data = await response.json();
-      console.log("Delete success:", data);
 
       if (data.result === "ok") {
         setAnswerKeyUrl(null);
@@ -193,9 +180,6 @@ export const useUploadAnswerKey = () => {
     uploadAnswerKey,
     deleteAnswerKey,
     resetUpload,
-    setAnswerKeyUrl, // FIX: was missing -- Dashboard.jsx's handleViewQuiz
-    // destructures and calls this directly to load a quiz's stored
-    // answerKeyUrl, which threw "setAnswerKeyUrl is not a function"
-    // because it was undefined (never returned from this hook).
+    setAnswerKeyUrl,
   };
 };

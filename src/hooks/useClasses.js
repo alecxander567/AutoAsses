@@ -524,7 +524,7 @@ export const useClasses = () => {
     addStudent,
     removeStudent,
     editStudent,
-    updateStudentScore, // Add this to the return object
+    updateStudentScore, 
     addQuiz,
     editQuiz,
     deleteQuiz,
