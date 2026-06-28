@@ -6,7 +6,7 @@ const LoadingSpinner = ({ size = "text-4xl", color = "text-emerald-600" }) => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-seashell-cream">
       <div className="text-center">
         <FaSpinner className={`animate-spin ${size} ${color} mx-auto mb-4`} />
-        <p className="text-emerald-700/70">Loading QuizChecker...</p>
+        <p className="text-emerald-700/70">Loading...</p>
       </div>
     </div>
   );

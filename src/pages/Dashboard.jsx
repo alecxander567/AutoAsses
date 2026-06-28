@@ -1,61 +1,48 @@
 // src/pages/Dashboard.jsx
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FaUser,
   FaSignOutAlt,
   FaSpinner,
-  FaFileAlt,
   FaCheckCircle,
   FaClipboardCheck,
-  FaChartBar,
-  FaHistory,
-  FaPlus,
   FaCloudUploadAlt,
   FaRobot,
   FaUsers,
-  FaEye,
-  FaFilter,
-  FaBell,
-  FaCog,
   FaHome,
   FaBook,
   FaChartLine,
-  FaRocket,
-  FaChalkboardTeacher,
   FaArrowLeft,
   FaFileImage,
   FaCheck,
   FaTrash,
   FaExclamationTriangle,
-  FaClock,
-  FaGraduationCap,
-  FaChartPie,
-  FaStar,
-  FaExchangeAlt,
   FaLightbulb,
+  FaExchangeAlt,
 } from "react-icons/fa";
 import { useAuthActions } from "../hooks/useAuthActions";
 import { useClasses } from "../hooks/useClasses";
 import { useUploadAnswerKey } from "../hooks/useUploadAnswerKey";
 import AddClassModal from "../components/AddClassModal";
-import ClassCard from "../components/ClassCard";
-import ClassDetailsView from "../components/ClassDetailsView";
 import AddStudentModal from "../components/AddStudentModal";
 import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
 import Alert from "../components/Alert";
-import QuizCard from "../components/QuizCard";
 import AddQuizModal from "../components/AddQuizModal";
-import LoadingSpinner from "../components/LoadingSpinner";
 import CompareStudentModal from "../components/CompareStudentModal";
+import Profile from "../components/Profile";
 import { analyzeQuizResults } from "../services/googleAIService";
+import OverviewTab from "../components/OverViewTab";
+import QuizzesTab from "../components/QuizzesTab";
+import StudentsTab from "../components/StudentsTab";
+import AnalyticsTab from "../components/AnalyticsTab";
+import NotificationDropdown from "../components/NotificationDropdown";
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user, loading: authLoading, handleLogout } = useAuthActions();
+  const { user, handleLogout } = useAuthActions();
   const {
     classes,
-    loading: classesLoading,
     actionLoading,
     addClass,
     editClass,
@@ -70,42 +57,39 @@ const Dashboard = () => {
     getClassById,
     updateStudentScore,
   } = useClasses();
+
   const [activeTab, setActiveTab] = useState("overview");
   const [searchQuery, setSearchQuery] = useState("");
   const [showAddClassModal, setShowAddClassModal] = useState(false);
   const [classToEdit, setClassToEdit] = useState(null);
+  const [classToDelete, setClassToDelete] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const [selectedClassId, setSelectedClassId] = useState(null);
+
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [showEditStudentModal, setShowEditStudentModal] = useState(false);
   const [studentToEdit, setStudentToEdit] = useState(null);
+
   const [showAddQuizModal, setShowAddQuizModal] = useState(false);
   const [quizToEdit, setQuizToEdit] = useState(null);
   const [quizToDelete, setQuizToDelete] = useState(null);
-  const [alert, setAlert] = useState({ type: "", message: "" });
-  const [deletingId, setDeletingId] = useState(null);
-  const [classToDelete, setClassToDelete] = useState(null);
-
-  // State for viewing quiz details
   const [selectedQuiz, setSelectedQuiz] = useState(null);
 
-  // State for image delete confirmation
   const [showImageDeleteModal, setShowImageDeleteModal] = useState(false);
   const [isDeletingImage, setIsDeletingImage] = useState(false);
-
-  // State for logout loading
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  // State for compare modal
   const [compareModalOpen, setCompareModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedQuizForCompare, setSelectedQuizForCompare] = useState(null);
   const [updatingStudentScore, setUpdatingStudentScore] = useState(false);
 
-  // State for AI analysis
   const [quizAnalysis, setQuizAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
 
-  // Use the upload hook
+  const [alert, setAlert] = useState({ type: "", message: "" });
+  const [showProfile, setShowProfile] = useState(false);
+
   const {
     answerKeyUrl,
     uploading,
@@ -118,7 +102,7 @@ const Dashboard = () => {
 
   const fileInputRef = useRef(null);
 
-  // ✅ Calculate stats at component level
+  // ── Derived stats ────────────────────────────────────────────────────────────
   const totalQuizzes = classes.reduce(
     (acc, cls) => acc + (cls.quizzes?.length || 0),
     0,
@@ -128,7 +112,6 @@ const Dashboard = () => {
     0,
   );
 
-  // Calculate average score
   let totalScore = 0;
   let studentsWithScores = 0;
   classes.forEach((cls) => {
@@ -141,7 +124,6 @@ const Dashboard = () => {
   });
   const avgScore = studentsWithScores > 0 ? totalScore / studentsWithScores : 0;
 
-  // Calculate pass/fail rates
   let passed = 0;
   let failed = 0;
   classes.forEach((cls) => {
@@ -151,11 +133,8 @@ const Dashboard = () => {
         student.avgScore !== null &&
         student.avgScore !== 0
       ) {
-        if (student.avgScore >= 70) {
-          passed++;
-        } else {
-          failed++;
-        }
+        if (student.avgScore >= 70) passed++;
+        else failed++;
       }
     });
   });
@@ -163,27 +142,88 @@ const Dashboard = () => {
   const passRate =
     totalGraded > 0 ? Math.round((passed / totalGraded) * 100) : 0;
 
-  // Calculate pending checks
-  const pendingChecks = classes.reduce((acc, cls) => {
-    return (
+  const pendingChecks = classes.reduce(
+    (acc, cls) =>
       acc +
       (cls.students?.filter(
         (s) =>
           s.avgScore === undefined || s.avgScore === null || s.avgScore === 0,
-      ).length || 0)
-    );
-  }, 0);
-
-  // Calculate completed checks (students with scores)
+      ).length || 0),
+    0,
+  );
   const completedChecks = totalGraded;
-
-  // Calculate accuracy rate
   const accuracyRate =
     studentsWithScores > 0 ? Math.round(totalScore / studentsWithScores) : 0;
 
-  // ─── FIX 1: loadQuizAnalysis accepts quizId and bails if quiz changed ───────
+  // ── AI Analysis ──────────────────────────────────────────────────────────────
+  const generateFallbackAnalysis = (students, quiz) => {
+    const scores = students
+      .filter((s) => s.quizScores?.[quiz.id]?.score !== undefined)
+      .map((s) => s.quizScores[quiz.id].score);
+
+    if (scores.length === 0) return null;
+
+    const avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+    const passCount = scores.filter((s) => s >= 70).length;
+    const failCount = scores.filter((s) => s < 70).length;
+
+    const gradeDist = {
+      A: scores.filter((s) => s >= 90).length,
+      B: scores.filter((s) => s >= 80 && s < 90).length,
+      C: scores.filter((s) => s >= 70 && s < 80).length,
+      D: scores.filter((s) => s >= 60 && s < 70).length,
+      F: scores.filter((s) => s < 60).length,
+    };
+
+    const questionStats = {};
+    students.forEach((s) => {
+      (s.quizScores?.[quiz.id]?.details || []).forEach((d) => {
+        if (!questionStats[d.questionNumber]) {
+          questionStats[d.questionNumber] = { correct: 0, total: 0 };
+        }
+        questionStats[d.questionNumber].total++;
+        if (d.isCorrect) questionStats[d.questionNumber].correct++;
+      });
+    });
+
+    const difficultQuestions = Object.entries(questionStats)
+      .map(([q, stats]) => ({
+        questionNumber: parseInt(q),
+        percentCorrect: Math.round((stats.correct / stats.total) * 100),
+      }))
+      .sort((a, b) => a.percentCorrect - b.percentCorrect)
+      .slice(0, 3);
+
+    return {
+      summary: `Class average is ${avg}% with ${passCount} students passing and ${failCount} students failing.`,
+      totalStudents: scores.length,
+      averageScore: avg,
+      passRate: Math.round((passCount / scores.length) * 100),
+      failRate: Math.round((failCount / scores.length) * 100),
+      gradeDistribution: gradeDist,
+      mostDifficultQuestions: difficultQuestions.map((q) => ({
+        questionNumber: q.questionNumber,
+        percentCorrect: q.percentCorrect,
+        insight: `Only ${q.percentCorrect}% of students got this question correct.`,
+        correctAnswer: "N/A",
+        studentAnswers: {},
+        commonWrongAnswer: "N/A",
+      })),
+      recommendations: [
+        "Review the most difficult questions with the class.",
+        "Consider providing additional practice materials.",
+        "Focus on topics where students struggled the most.",
+      ],
+      insights: [
+        `${passCount} out of ${scores.length} students passed this quiz.`,
+        `The average score was ${avg}%.`,
+        `${gradeDist.A} students got an A, ${gradeDist.F} students got an F.`,
+      ],
+    };
+  };
+
   const loadQuizAnalysis = async (quiz, students) => {
-    const quizId = quiz.id; // capture at call time
+    const quizId = quiz.id;
 
     if (!quiz || !students || students.length === 0) {
       setQuizAnalysis(null);
@@ -215,17 +255,10 @@ const Dashboard = () => {
       };
 
       const result = await analyzeQuizResults(quizData);
-
-      // ✅ Don't update state if the user navigated to a different quiz
       if (selectedQuiz?.id !== quizId) return;
 
-      if (result) {
-        setQuizAnalysis(result);
-      } else {
-        setQuizAnalysis(generateFallbackAnalysis(students, quiz));
-      }
+      setQuizAnalysis(result || generateFallbackAnalysis(students, quiz));
     } catch (error) {
-      // ✅ Same guard on the error path
       if (selectedQuiz?.id !== quizId) return;
       console.error("Analysis error:", error);
       setQuizAnalysis(generateFallbackAnalysis(students, quiz));
@@ -234,87 +267,15 @@ const Dashboard = () => {
     }
   };
 
-  // Fallback analysis function
-  const generateFallbackAnalysis = (students, quiz) => {
-    const scores = students
-      .filter((s) => s.quizScores?.[quiz.id]?.score !== undefined)
-      .map((s) => s.quizScores[quiz.id].score);
-
-    if (scores.length === 0) return null;
-
-    const avgScore = Math.round(
-      scores.reduce((a, b) => a + b, 0) / scores.length,
-    );
-    const passCount = scores.filter((s) => s >= 70).length;
-    const failCount = scores.filter((s) => s < 70).length;
-
-    const gradeDist = {
-      A: scores.filter((s) => s >= 90).length,
-      B: scores.filter((s) => s >= 80 && s < 90).length,
-      C: scores.filter((s) => s >= 70 && s < 80).length,
-      D: scores.filter((s) => s >= 60 && s < 70).length,
-      F: scores.filter((s) => s < 60).length,
-    };
-
-    const questionStats = {};
-    students.forEach((s) => {
-      const details = s.quizScores?.[quiz.id]?.details || [];
-      details.forEach((d) => {
-        if (!questionStats[d.questionNumber]) {
-          questionStats[d.questionNumber] = { correct: 0, total: 0 };
-        }
-        questionStats[d.questionNumber].total++;
-        if (d.isCorrect) questionStats[d.questionNumber].correct++;
-      });
-    });
-
-    const difficultQuestions = Object.entries(questionStats)
-      .map(([q, stats]) => ({
-        questionNumber: parseInt(q),
-        percentCorrect: Math.round((stats.correct / stats.total) * 100),
-        total: stats.total,
-      }))
-      .sort((a, b) => a.percentCorrect - b.percentCorrect)
-      .slice(0, 3);
-
-    return {
-      summary: `Class average is ${avgScore}% with ${passCount} students passing and ${failCount} students failing.`,
-      totalStudents: scores.length,
-      averageScore: avgScore,
-      passRate: Math.round((passCount / scores.length) * 100),
-      failRate: Math.round((failCount / scores.length) * 100),
-      gradeDistribution: gradeDist,
-      mostDifficultQuestions: difficultQuestions.map((q) => ({
-        questionNumber: q.questionNumber,
-        percentCorrect: q.percentCorrect,
-        insight: `Only ${q.percentCorrect}% of students got this question correct.`,
-        correctAnswer: "N/A",
-        studentAnswers: {},
-        commonWrongAnswer: "N/A",
-      })),
-      recommendations: [
-        `Review the most difficult questions with the class.`,
-        `Consider providing additional practice materials.`,
-        `Focus on topics where students struggled the most.`,
-      ],
-      insights: [
-        `${passCount} out of ${scores.length} students passed this quiz.`,
-        `The average score was ${avgScore}%.`,
-        `${gradeDist.A} students got an A, ${gradeDist.F} students got an F.`,
-      ],
-    };
-  };
-
-  // ─── FIX 2: useEffect captures quizId and guards against stale closures ──────
+  // ── Effects ──────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (selectedQuiz && activeTab === "quiz-details") {
-      const quizId = selectedQuiz.id; // capture current quiz id
+      const quizId = selectedQuiz.id;
       const classData = getClassById(selectedQuiz.classId);
       const students = classData?.students || [];
 
       if (students.length > 0) {
         const timer = setTimeout(() => {
-          // ✅ Only proceed if the user is still viewing the same quiz
           if (selectedQuiz?.id === quizId) {
             loadQuizAnalysis(selectedQuiz, students);
           }
@@ -324,31 +285,29 @@ const Dashboard = () => {
     }
   }, [selectedQuiz, activeTab, getClassById]);
 
+  // ── Auth ─────────────────────────────────────────────────────────────────────
   const handleLogoutClick = async () => {
     setIsLoggingOut(true);
     try {
       const result = await handleLogout();
-      if (result.success) {
-        navigate("/login");
-      }
+      if (result.success) navigate("/login");
     } catch (error) {
       console.error("Logout error:", error);
       setIsLoggingOut(false);
     }
   };
 
-  const showAlert = (type, message) => {
-    setAlert({ type, message });
-  };
+  // ── Alerts ───────────────────────────────────────────────────────────────────
+  const showAlert = (type, message) => setAlert({ type, message });
 
+  // ── Class handlers ───────────────────────────────────────────────────────────
   const handleAddClass = async (className, description) => {
     const result = await addClass(className, description);
-    if (result.success) {
+    if (result.success)
       showAlert(
         "success",
         `Class "${className}" has been created successfully!`,
       );
-    }
     return result;
   };
 
@@ -360,70 +319,49 @@ const Dashboard = () => {
   const handleModalSubmit = async (className, description) => {
     if (classToEdit) {
       const result = await editClass(classToEdit.id, className, description);
-      if (result.success) {
+      if (result.success)
         showAlert(
           "success",
           `Class "${className}" has been updated successfully!`,
         );
-      }
       return result;
-    } else {
-      return await handleAddClass(className, description);
     }
+    return await handleAddClass(className, description);
   };
 
-  const handleViewClass = (classId) => {
-    setSelectedClassId(classId);
+  const handleViewClass = (classId) => setSelectedClassId(classId);
+  const handleBackToClasses = () => setSelectedClassId(null);
+
+  const handleRequestDelete = (classId) => {
+    setClassToDelete(classes.find((c) => c.id === classId));
   };
 
-  const handleBackToClasses = () => {
-    setSelectedClassId(null);
+  const handleConfirmDelete = async () => {
+    if (!classToDelete) return;
+    setDeletingId(classToDelete.id);
+    const result = await deleteClass(classToDelete.id);
+    if (result.success)
+      showAlert("success", `Class "${classToDelete.name}" has been deleted.`);
+    setDeletingId(null);
+    setClassToDelete(null);
   };
 
-  // ─── FIX 3: handleViewQuiz clears ALL stale state synchronously first ────────
-  const handleViewQuiz = (quiz) => {
-    // Clear stale state BEFORE setting the new quiz so the render never
-    // briefly shows the previous quiz's analysis or answer key image.
-    setQuizAnalysis(null);
-    setAnalysisLoading(false);
-    resetUpload(); // always wipe the previous image first
-
-    setSelectedQuiz(quiz);
-    setSelectedClassId(quiz.classId);
-
-    // Now load the correct answer key for this quiz (if it has one)
-    if (quiz.answerKeyUrl) {
-      setAnswerKeyUrl(quiz.answerKeyUrl);
-    }
-
-    setActiveTab("quiz-details");
-  };
-
-  const handleBackToQuizzes = () => {
-    setSelectedQuiz(null);
-    setQuizAnalysis(null);
-    setAnalysisLoading(false);
-    resetUpload();
-    setActiveTab("quizzes");
-  };
-
+  // ── Student handlers ─────────────────────────────────────────────────────────
   const handleAddStudent = async (studentName, studentEmail) => {
     if (!selectedClassId) return { success: false, error: "No class selected" };
     const result = await addStudent(selectedClassId, studentName, studentEmail);
-    if (result.success) {
+    if (result.success)
       showAlert(
         "success",
         `Student "${studentName}" has been added successfully!`,
       );
-    }
     return result;
   };
 
   const handleRemoveStudent = async (classId, studentId) => {
     const result = await removeStudent(classId, studentId);
-    if (result.success) {
+    if (result.success)
       showAlert("success", "Student has been removed from the class.");
-    }
     return result;
   };
 
@@ -433,80 +371,92 @@ const Dashboard = () => {
   };
 
   const handleEditStudentSubmit = async (studentName, studentEmail) => {
-    if (!selectedClassId || !studentToEdit) {
+    if (!selectedClassId || !studentToEdit)
       return { success: false, error: "No class or student selected" };
-    }
-
     const result = await editStudent(
       selectedClassId,
       studentToEdit.id,
       studentName,
       studentEmail,
     );
-
-    if (result.success) {
+    if (result.success)
       showAlert(
         "success",
         `Student "${studentName}" has been updated successfully!`,
       );
-    }
     return result;
   };
 
-  const handleRequestDelete = (classId) => {
-    const cls = classes.find((c) => c.id === classId);
-    setClassToDelete(cls);
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!classToDelete) return;
-    setDeletingId(classToDelete.id);
-    const result = await deleteClass(classToDelete.id);
-    if (result.success) {
-      showAlert("success", `Class "${classToDelete.name}" has been deleted.`);
-    }
-    setDeletingId(null);
-    setClassToDelete(null);
-  };
-
-  // Quiz Handlers
+  // ── Quiz handlers ────────────────────────────────────────────────────────────
   const handleAddQuiz = async (classId, quizData) => {
     const result = await addQuiz(classId, quizData);
-    if (result.success) {
+    if (result.success)
       showAlert(
         "success",
         `Quiz "${quizData.title}" has been created successfully!`,
       );
-    }
     return result;
   };
 
   const handleEditQuiz = async (classId, quizData) => {
     if (!quizToEdit) return { success: false, error: "No quiz selected" };
     const result = await editQuiz(classId, quizToEdit.id, quizData);
-    if (result.success) {
+    if (result.success)
       showAlert(
         "success",
         `Quiz "${quizData.title}" has been updated successfully!`,
       );
-    }
     return result;
   };
 
   const handleDeleteQuiz = async () => {
     if (!quizToDelete) return;
     const result = await deleteQuiz(quizToDelete.classId, quizToDelete.id);
-    if (result.success) {
+    if (result.success)
       showAlert("success", `Quiz "${quizToDelete.title}" has been deleted.`);
-    }
     setQuizToDelete(null);
     return result;
   };
 
-  // Image delete handlers
-  const handleImageDeleteClick = () => {
-    setShowImageDeleteModal(true);
+  // NOTE: declared with useCallback, and BEFORE the effect below that
+  // references it, so the window bridge always closes over a stable,
+  // up-to-date function instead of a stale one.
+  const handleViewQuiz = useCallback(
+    (quiz) => {
+      setQuizAnalysis(null);
+      setAnalysisLoading(false);
+      resetUpload();
+      setSelectedQuiz(quiz);
+      setSelectedClassId(quiz.classId);
+      if (quiz.answerKeyUrl) setAnswerKeyUrl(quiz.answerKeyUrl);
+      setActiveTab("quiz-details");
+    },
+    [resetUpload, setAnswerKeyUrl],
+  );
+
+  const handleBackToQuizzes = () => {
+    setSelectedQuiz(null);
+    setQuizAnalysis(null);
+    setAnalysisLoading(false);
+    resetUpload();
+    setActiveTab("quizzes");
   };
+
+  // Expose handlers for NotificationDropdown window callbacks.
+  // Moved here (after handleViewQuiz is declared) to fix the
+  // "accessed before declaration" / stale-closure issue.
+  useEffect(() => {
+    window.handleViewQuizFromNotification = (quiz) => handleViewQuiz(quiz);
+    window.setActiveTabFromNotification = (tab) => setActiveTab(tab);
+    return () => {
+      delete window.handleViewQuizFromNotification;
+      delete window.setActiveTabFromNotification;
+    };
+  }, [handleViewQuiz]);
+
+  // ── Image handlers ───────────────────────────────────────────────────────────
+  const handleImageDeleteClick = () => setShowImageDeleteModal(true);
+  const handleImageDeleteCancel = () => setShowImageDeleteModal(false);
 
   const handleImageDeleteConfirm = async () => {
     setIsDeletingImage(true);
@@ -517,25 +467,26 @@ const Dashboard = () => {
           answerKeyUrl: null,
         });
       }
-      setShowImageDeleteModal(false);
-      setIsDeletingImage(false);
       showAlert("success", "Image deleted successfully!");
     } catch (error) {
       console.error("Delete failed:", error);
-      setShowImageDeleteModal(false);
-      setIsDeletingImage(false);
       showAlert(
         "error",
-        `${error.message || "Failed to delete image. Please try again."}`,
+        error.message || "Failed to delete image. Please try again.",
       );
+    } finally {
+      setShowImageDeleteModal(false);
+      setIsDeletingImage(false);
     }
   };
 
-  const handleImageDeleteCancel = () => {
-    setShowImageDeleteModal(false);
+  // ── Compare / score handlers ─────────────────────────────────────────────────
+  const handleCompareStudent = (student, quiz) => {
+    setSelectedStudent(student);
+    setSelectedQuizForCompare(quiz);
+    setCompareModalOpen(true);
   };
 
-  // Student score update handler
   const handleStudentScoreUpdate = async (studentId, score, details) => {
     setUpdatingStudentScore(true);
     try {
@@ -547,7 +498,6 @@ const Dashboard = () => {
           score,
           details,
         );
-
         if (result.success) {
           showAlert(
             "success",
@@ -555,8 +505,7 @@ const Dashboard = () => {
           );
           if (selectedQuiz) {
             const classData = getClassById(selectedQuiz.classId);
-            const students = classData?.students || [];
-            loadQuizAnalysis(selectedQuiz, students);
+            loadQuizAnalysis(selectedQuiz, classData?.students || []);
           }
         } else {
           showAlert("error", "Failed to update student score");
@@ -570,33 +519,7 @@ const Dashboard = () => {
     }
   };
 
-  const handleCompareStudent = (student, quiz) => {
-    setSelectedStudent(student);
-    setSelectedQuizForCompare(quiz);
-    setCompareModalOpen(true);
-  };
-
-  // Tab content renderer
-  const renderContent = () => {
-    if (activeTab === "quiz-details" && selectedQuiz) {
-      return renderQuizDetails();
-    }
-
-    switch (activeTab) {
-      case "overview":
-        return renderOverview();
-      case "quizzes":
-        return renderQuizzes();
-      case "students":
-        return renderStudents();
-      case "analytics":
-        return renderAnalytics();
-      default:
-        return renderOverview();
-    }
-  };
-
-  // Render analysis section
+  // ── Render helpers ───────────────────────────────────────────────────────────
   const renderAnalysisSection = (quiz, students) => {
     if (analysisLoading) {
       return (
@@ -608,7 +531,6 @@ const Dashboard = () => {
     }
 
     const hasGradedStudents = students.some((s) => s.quizScores?.[quiz.id]);
-
     if (!hasGradedStudents) {
       return (
         <div className="bg-gray-50 rounded-xl p-6 text-center">
@@ -632,7 +554,6 @@ const Dashboard = () => {
 
     return (
       <div className="space-y-4">
-        {/* Stats Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl p-3 text-center">
             <p className="text-xs text-emerald-600 font-medium">AVG SCORE</p>
@@ -660,7 +581,6 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Grade Distribution */}
         {analysis.gradeDistribution && (
           <div>
             <h4 className="text-sm font-semibold text-gray-700 mb-2">
@@ -688,43 +608,39 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Most Difficult Questions */}
-        {analysis.mostDifficultQuestions &&
-          analysis.mostDifficultQuestions.length > 0 && (
-            <div>
-              <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                <FaExclamationTriangle className="text-red-500" />
-                Most Difficult Questions
-              </h4>
-              <div className="space-y-2">
-                {analysis.mostDifficultQuestions.slice(0, 3).map((q, idx) => (
-                  <div
-                    key={idx}
-                    className="bg-red-50 border border-red-200 rounded-lg p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-gray-800">
-                        Question {q.questionNumber}
-                      </span>
-                      <span className="text-sm font-semibold text-red-600">
-                        {q.percentCorrect}% correct
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">{q.insight}</p>
+        {analysis.mostDifficultQuestions?.length > 0 && (
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <FaExclamationTriangle className="text-red-500" />
+              Most Difficult Questions
+            </h4>
+            <div className="space-y-2">
+              {analysis.mostDifficultQuestions.slice(0, 3).map((q, idx) => (
+                <div
+                  key={idx}
+                  className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-gray-800">
+                      Question {q.questionNumber}
+                    </span>
+                    <span className="text-sm font-semibold text-red-600">
+                      {q.percentCorrect}% correct
+                    </span>
                   </div>
-                ))}
-              </div>
+                  <p className="text-sm text-gray-600 mt-1">{q.insight}</p>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
 
-        {/* Summary */}
         {analysis.summary && (
           <div className="p-3 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
             <p className="text-sm text-gray-700">{analysis.summary}</p>
           </div>
         )}
 
-        {/* Recommendations */}
-        {analysis.recommendations && analysis.recommendations.length > 0 && (
+        {analysis.recommendations?.length > 0 && (
           <div>
             <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
               <FaLightbulb className="text-amber-500" />
@@ -743,8 +659,7 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Insights */}
-        {analysis.insights && analysis.insights.length > 0 && (
+        {analysis.insights?.length > 0 && (
           <div>
             <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
               <FaCheckCircle className="text-emerald-500" />
@@ -766,7 +681,6 @@ const Dashboard = () => {
     );
   };
 
-  // Quiz Details View
   const renderQuizDetails = () => {
     const quiz = selectedQuiz;
     const classData = getClassById(quiz.classId);
@@ -775,7 +689,6 @@ const Dashboard = () => {
     const handleFileChange = async (event) => {
       const file = event.target.files[0];
       if (!file) return;
-
       try {
         const url = await uploadAnswerKey(file);
         if (url && selectedClassId && selectedQuiz) {
@@ -788,20 +701,14 @@ const Dashboard = () => {
         console.error("Upload failed:", error);
         showAlert(
           "error",
-          `${error.message || "Failed to upload image. Please try again."}`,
+          error.message || "Failed to upload image. Please try again.",
         );
       }
-
       event.target.value = null;
-    };
-
-    const handleUploadClick = () => {
-      fileInputRef.current?.click();
     };
 
     return (
       <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-        {/* Header with back button */}
         <div className="flex items-center gap-4 mb-6">
           <button
             onClick={handleBackToQuizzes}
@@ -817,9 +724,8 @@ const Dashboard = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left Panel - Students List + Analysis */}
+          {/* Left Panel */}
           <div className="space-y-6">
-            {/* Students List */}
             <div className="bg-gray-50 rounded-xl p-4">
               <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
                 <FaUsers className="text-ocean-blue" />
@@ -861,7 +767,6 @@ const Dashboard = () => {
                               );
                             }
                             const details = quizResult.details || [];
-                            const total = details.length;
                             const correct = details.filter(
                               (d) => d.isCorrect,
                             ).length;
@@ -870,7 +775,7 @@ const Dashboard = () => {
                                 <p className="text-sm font-bold text-emerald-600">
                                   {quizResult.score}%{" "}
                                   <span className="text-xs font-medium text-emerald-500">
-                                    ({correct}/{total})
+                                    ({correct}/{details.length})
                                   </span>
                                 </p>
                                 <p className="text-xs text-gray-400">
@@ -893,7 +798,6 @@ const Dashboard = () => {
               }
             </div>
 
-            {/* AI Analysis Section */}
             <div className="bg-white rounded-xl border border-purple-100 p-4">
               <div className="flex items-center gap-2 mb-3">
                 <FaRobot className="text-purple-600" />
@@ -908,7 +812,7 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Right Panel - Upload Area */}
+          {/* Right Panel */}
           <div className="space-y-6">
             <div className="bg-gray-50 rounded-xl p-4">
               <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
@@ -916,7 +820,6 @@ const Dashboard = () => {
                 Answer Key Upload
               </h3>
 
-              {/* Important Notice */}
               <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4">
                 <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
                 <div className="space-y-2">
@@ -947,7 +850,6 @@ const Dashboard = () => {
                 </div>
               </div>
 
-              {/* Hidden file input */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -957,7 +859,7 @@ const Dashboard = () => {
               />
 
               <div
-                onClick={handleUploadClick}
+                onClick={() => fileInputRef.current?.click()}
                 className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition bg-white">
                 {uploading ?
                   <div className="flex flex-col items-center gap-3">
@@ -986,9 +888,8 @@ const Dashboard = () => {
                 }
               </div>
 
-              {/* Action buttons */}
-              <div className="flex gap-3 mt-4">
-                {answerKeyUrl && (
+              {answerKeyUrl && (
+                <div className="flex gap-3 mt-4">
                   <button
                     onClick={handleImageDeleteClick}
                     disabled={deleting}
@@ -997,675 +898,109 @@ const Dashboard = () => {
                     }`}>
                     {deleting ?
                       <>
-                        <FaSpinner className="animate-spin" />
-                        Deleting...
+                        <FaSpinner className="animate-spin" /> Deleting...
                       </>
                     : <>
-                        <FaTrash />
-                        Delete Image
+                        <FaTrash /> Delete Image
                       </>
                     }
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  // Overview Tab
-  const renderOverview = () => {
-    const recentQuizResultsDisplay = [];
-    classes.forEach((cls) => {
-      (cls.quizzes || []).forEach((quiz) => {
-        const gradedStudents =
-          cls.students?.filter((s) => s.quizScores?.[quiz.id]) || [];
-        if (gradedStudents.length > 0) {
-          const scores = gradedStudents.map((s) => s.quizScores[quiz.id].score);
-          const avg = Math.round(
-            scores.reduce((a, b) => a + b, 0) / scores.length,
-          );
-          const passCount = scores.filter((s) => s >= 70).length;
-          recentQuizResultsDisplay.push({
-            id: quiz.id,
-            title: quiz.title,
-            date: quiz.date || quiz.createdAt?.split("T")[0] || "N/A",
-            students: gradedStudents.length,
-            average: avg,
-            passRate: Math.round((passCount / scores.length) * 100),
-          });
-        }
-      });
-    });
-    recentQuizResultsDisplay.sort((a, b) => {
-      const dateA = new Date(a.date);
-      const dateB = new Date(b.date);
-      return dateB - dateA;
-    });
-    const recentQuizResultsFiltered = recentQuizResultsDisplay.slice(0, 5);
-
-    return (
-      <>
-        {/* Stats Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-6 sm:mb-8">
-          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
-            <p className="text-xs sm:text-sm text-gray-500">Total Quizzes</p>
-            <p className="text-xl sm:text-2xl font-bold text-emerald-900">
-              {totalQuizzes}
-            </p>
-            <p className="text-xs text-emerald-600">{classes.length} classes</p>
-          </div>
-          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-noon-warm/30">
-            <p className="text-xs sm:text-sm text-gray-500">Pending Checks</p>
-            <p className="text-xl sm:text-2xl font-bold text-noon-warm">
-              {pendingChecks}
-            </p>
-            <p className="text-xs text-noon-warm">
-              <FaClock className="inline mr-1" />
-              Needs grading
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
-            <p className="text-xs sm:text-sm text-gray-500">Completed</p>
-            <p className="text-xl sm:text-2xl font-bold text-emerald-600">
-              {completedChecks}
-            </p>
-            <p className="text-xs text-emerald-600">
-              <FaCheck className="inline mr-1" />
-              Graded
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-ocean-blue/30">
-            <p className="text-xs sm:text-sm text-gray-500">Accuracy Rate</p>
-            <p className="text-xl sm:text-2xl font-bold text-ocean-blue">
-              {accuracyRate}%
-            </p>
-            <p className="text-xs text-ocean-blue">
-              <FaChartLine className="inline mr-1" />
-              Overall average
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-purple-200">
-            <p className="text-xs sm:text-sm text-gray-500">Students</p>
-            <p className="text-xl sm:text-2xl font-bold text-purple-600">
-              {totalStudents}
-            </p>
-            <p className="text-xs text-purple-600">
-              <FaGraduationCap className="inline mr-1" />
-              {totalGraded} graded
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-pink-200">
-            <p className="text-xs sm:text-sm text-gray-500">Pass Rate</p>
-            <p className="text-xl sm:text-2xl font-bold text-pink-600">
-              {passRate}%
-            </p>
-            <p className="text-xs text-pink-600">
-              <FaChartPie className="inline mr-1" />
-              {passed} passed / {failed} failed
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-          {/* Quick Actions */}
-          <div className="lg:col-span-1 space-y-4">
-            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <FaRocket className="text-emerald-600" />
-                Quick Actions
-              </h3>
-              <div className="space-y-3">
-                <button
-                  onClick={() => setActiveTab("quizzes")}
-                  className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
-                  <FaBook />
-                  <span className="text-sm font-medium">View All Quizzes</span>
-                </button>
-                <button
-                  onClick={() => setActiveTab("students")}
-                  className="w-full bg-blue-500 hover:bg-blue-600 text-white p-3 rounded-xl transition-all flex items-center gap-3">
-                  <FaUsers />
-                  <span className="text-sm font-medium">Manage Students</span>
-                </button>
-                <button
-                  onClick={() => setShowAddClassModal(true)}
-                  className="w-full bg-gradient-to-r from-purple-600 to-purple-500 text-white p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
-                  <FaPlus />
-                  <span className="text-sm font-medium">Create New Class</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Quick Stats */}
-            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <FaChartBar className="text-noon-warm" />
-                Quick Stats
-              </h3>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                  <span className="text-sm text-gray-600">Total Classes</span>
-                  <span className="text-sm font-bold text-emerald-600">
-                    {classes.length}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                  <span className="text-sm text-gray-600">Total Students</span>
-                  <span className="text-sm font-bold text-purple-600">
-                    {totalStudents}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                  <span className="text-sm text-gray-600">Total Quizzes</span>
-                  <span className="text-sm font-bold text-blue-600">
-                    {totalQuizzes}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                  <span className="text-sm text-gray-600">Average Score</span>
-                  <span className="text-sm font-bold text-emerald-600">
-                    {avgScore.toFixed(1)}%
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Recent Activity */}
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-              <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                  <FaHistory className="text-emerald-600" />
-                  Recent Activity
-                </h3>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="Search activities..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="px-3 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                  />
-                  <button className="p-1.5 text-gray-500 hover:text-gray-700 bg-gray-100 rounded-lg">
-                    <FaFilter />
-                  </button>
-                </div>
-              </div>
-              <div className="divide-y divide-gray-100">
-                {recentQuizResultsFiltered.length > 0 ?
-                  recentQuizResultsFiltered.map((result) => (
-                    <div
-                      key={result.id}
-                      className="px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center justify-between hover:bg-gray-50 transition gap-2">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center">
-                          <FaFileAlt className="text-emerald-600 text-sm" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-700">
-                            {result.title}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {result.students} students • {result.date}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-emerald-600">
-                          {result.average}%
-                        </span>
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            result.passRate >= 80 ?
-                              "bg-emerald-100 text-emerald-700"
-                            : result.passRate >= 60 ?
-                              "bg-noon-warm/20 text-noon-warm"
-                            : "bg-red-100 text-red-700"
-                          }`}>
-                          {result.passRate}% pass
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                : <div className="px-4 sm:px-6 py-8 text-center text-gray-500">
-                    <p>
-                      No quiz results yet. Start grading students to see
-                      activity!
-                    </p>
-                  </div>
-                }
-              </div>
-              {recentQuizResultsFiltered.length > 0 && (
-                <div className="px-4 sm:px-6 py-3 bg-gray-50 border-t border-gray-100">
-                  <button
-                    onClick={() => setActiveTab("quizzes")}
-                    className="text-sm text-emerald-600 hover:text-emerald-800 font-medium">
-                    View All Quizzes →
                   </button>
                 </div>
               )}
             </div>
           </div>
         </div>
-
-        {/* Recent Results Table */}
-        {recentQuizResultsFiltered.length > 0 && (
-          <div className="mt-6 sm:mt-8">
-            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-              <div className="px-4 sm:px-6 py-4 border-b border-gray-100">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                  <FaChartBar className="text-ocean-blue" />
-                  Quiz Results Overview
-                </h3>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Quiz Title
-                      </th>
-                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Date
-                      </th>
-                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Students
-                      </th>
-                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Average
-                      </th>
-                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Pass Rate
-                      </th>
-                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {recentQuizResultsFiltered.map((result) => (
-                      <tr
-                        key={result.id}
-                        className="hover:bg-gray-50 transition">
-                        <td className="px-4 sm:px-6 py-3 text-sm font-medium text-gray-700">
-                          {result.title}
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
-                          {result.date}
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
-                          {result.students}
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm font-medium text-ocean-blue">
-                          {result.average}%
-                        </td>
-                        <td className="px-4 sm:px-6 py-3 text-sm">
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              result.passRate >= 80 ?
-                                "bg-emerald-100 text-emerald-700"
-                              : result.passRate >= 60 ?
-                                "bg-noon-warm/20 text-noon-warm"
-                              : "bg-red-100 text-red-700"
-                            }`}>
-                            {result.passRate}%
-                          </span>
-                        </td>
-                        <td className="px-4 sm:px-6 py-3">
-                          <button
-                            onClick={() => {
-                              const quiz = classes
-                                .flatMap((c) => c.quizzes || [])
-                                .find((q) => q.id === result.id);
-                              if (quiz) handleViewQuiz(quiz);
-                            }}
-                            className="p-1 text-gray-400 hover:text-emerald-600 transition">
-                            <FaEye className="text-sm" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-      </>
-    );
-  };
-
-  // Quizzes Tab
-  const renderQuizzes = () => {
-    const allQuizzes = [];
-    classes.forEach((cls) => {
-      (cls.quizzes || []).forEach((quiz) => {
-        allQuizzes.push({
-          ...quiz,
-          className: cls.name,
-          classId: cls.id,
-          studentCount: cls.students?.length || 0,
-        });
-      });
-    });
-
-    const sortedQuizzes = allQuizzes.sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
-    );
-
-    return (
-      <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-        <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
-          <h3 className="font-bold text-gray-800 flex items-center gap-2">
-            <FaBook className="text-emerald-600" />
-            All Quizzes
-          </h3>
-          <button
-            onClick={() => {
-              setShowAddQuizModal(true);
-              setQuizToEdit(null);
-            }}
-            className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm">
-            <FaPlus />
-            Create Quiz
-          </button>
-        </div>
-        <div className="p-4 sm:p-6">
-          {sortedQuizzes.length === 0 ?
-            <div className="text-center py-8 sm:py-12">
-              <div className="w-16 h-16 mx-auto mb-4 bg-emerald-50 rounded-2xl flex items-center justify-center">
-                <FaBook className="text-emerald-400 text-3xl" />
-              </div>
-              <h4 className="text-lg font-semibold text-gray-700 mb-2">
-                No Quizzes Yet
-              </h4>
-              <p className="text-sm text-gray-500 mb-4 max-w-md mx-auto">
-                Create your first quiz and associate it with a class to start
-                tracking student performance.
-              </p>
-              <button
-                onClick={() => {
-                  setShowAddQuizModal(true);
-                  setQuizToEdit(null);
-                }}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl hover:shadow-lg transition text-sm font-medium">
-                <FaPlus />
-                Create Your First Quiz
-              </button>
-            </div>
-          : <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {sortedQuizzes.map((quiz) => (
-                <QuizCard
-                  key={quiz.id}
-                  quiz={quiz}
-                  classId={quiz.classId}
-                  onEdit={() => {
-                    setQuizToEdit(quiz);
-                    setShowAddQuizModal(true);
-                  }}
-                  onDelete={(quizId) => {
-                    setQuizToDelete({
-                      id: quizId,
-                      classId: quiz.classId,
-                      title: quiz.title,
-                    });
-                  }}
-                  onView={handleViewQuiz}
-                  onCompare={(quiz) => {
-                    handleViewQuiz(quiz);
-                  }}
-                  loading={actionLoading}
-                />
-              ))}
-            </div>
-          }
-        </div>
       </div>
     );
   };
 
-  // Students Tab
-  const renderStudents = () => {
-    const selectedClass =
-      selectedClassId ? getClassById(selectedClassId) : null;
+  // ── Tab renderers ────────────────────────────────────────────────────────────
+  const renderOverview = () => (
+    <OverviewTab
+      classes={classes}
+      totalQuizzes={totalQuizzes}
+      totalStudents={totalStudents}
+      totalGraded={totalGraded}
+      pendingChecks={pendingChecks}
+      completedChecks={completedChecks}
+      accuracyRate={accuracyRate}
+      avgScore={avgScore}
+      passRate={passRate}
+      passed={passed}
+      failed={failed}
+      searchQuery={searchQuery}
+      setSearchQuery={setSearchQuery}
+      setActiveTab={setActiveTab}
+      setShowAddClassModal={setShowAddClassModal}
+      handleViewQuiz={handleViewQuiz}
+    />
+  );
 
-    if (selectedClass) {
-      return (
-        <ClassDetailsView
-          classData={selectedClass}
-          onBack={handleBackToClasses}
-          onAddStudent={() => setShowAddStudentModal(true)}
-          onRemoveStudent={handleRemoveStudent}
-          onEditStudent={handleEditStudent}
-          loading={actionLoading}
-        />
-      );
+  const renderQuizzes = () => (
+    <QuizzesTab
+      classes={classes}
+      actionLoading={actionLoading}
+      setShowAddQuizModal={setShowAddQuizModal}
+      setQuizToEdit={setQuizToEdit}
+      setQuizToDelete={setQuizToDelete}
+      handleViewQuiz={handleViewQuiz}
+    />
+  );
+
+  const renderStudents = () => (
+    <StudentsTab
+      classes={classes}
+      selectedClassId={selectedClassId}
+      actionLoading={actionLoading}
+      deletingId={deletingId}
+      getClassById={getClassById}
+      setShowAddClassModal={setShowAddClassModal}
+      setShowAddStudentModal={setShowAddStudentModal}
+      setStudentToEdit={setStudentToEdit}
+      setShowEditStudentModal={setShowEditStudentModal}
+      handleRemoveStudent={handleRemoveStudent}
+      handleEditStudent={handleEditStudent}
+      handleRequestDelete={handleRequestDelete}
+      handleEditClass={handleEditClass}
+      handleViewClass={handleViewClass}
+      handleBackToClasses={handleBackToClasses}
+    />
+  );
+
+  const renderAnalytics = () => (
+    <AnalyticsTab
+      classes={classes}
+      avgScore={avgScore}
+      studentsWithScores={studentsWithScores}
+      totalQuizzes={totalQuizzes}
+      totalStudents={totalStudents}
+      totalGraded={totalGraded}
+      pendingChecks={pendingChecks}
+      passed={passed}
+      failed={failed}
+    />
+  );
+
+  const renderContent = () => {
+    if (activeTab === "quiz-details" && selectedQuiz)
+      return renderQuizDetails();
+    switch (activeTab) {
+      case "overview":
+        return renderOverview();
+      case "quizzes":
+        return renderQuizzes();
+      case "students":
+        return renderStudents();
+      case "analytics":
+        return renderAnalytics();
+      default:
+        return renderOverview();
     }
-
-    return (
-      <div className="space-y-6">
-        <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-          <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
-            <h3 className="font-bold text-gray-800 flex items-center gap-2">
-              <FaChalkboardTeacher className="text-emerald-600" />
-              My Classes
-            </h3>
-            <button
-              onClick={() => setShowAddClassModal(true)}
-              className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm">
-              <FaPlus />
-              Add Class
-            </button>
-          </div>
-
-          {classes.length === 0 ?
-            <div className="p-8 sm:p-12 text-center">
-              <div className="w-16 h-16 mx-auto mb-4 bg-emerald-50 rounded-2xl flex items-center justify-center">
-                <FaChalkboardTeacher className="text-emerald-400 text-3xl" />
-              </div>
-              <h4 className="text-lg font-semibold text-gray-700 mb-2">
-                No Classes Yet
-              </h4>
-              <p className="text-sm text-gray-500 mb-4 max-w-md mx-auto">
-                Create your first class to start organizing your students. Each
-                class can have its own set of students and quizzes.
-              </p>
-              <button
-                onClick={() => setShowAddClassModal(true)}
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white rounded-xl hover:shadow-lg transition text-sm font-medium">
-                <FaPlus />
-                Create Your First Class
-              </button>
-            </div>
-          : <div className="p-4 sm:p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {classes.map((cls) => (
-                  <ClassCard
-                    key={cls.id}
-                    classData={cls}
-                    onDelete={handleRequestDelete}
-                    onEdit={handleEditClass}
-                    onView={handleViewClass}
-                    deleting={deletingId === cls.id}
-                  />
-                ))}
-              </div>
-            </div>
-          }
-        </div>
-      </div>
-    );
   };
 
-  // Analytics Tab
-  const renderAnalytics = () => {
-    const gradeA = classes.reduce((acc, cls) => {
-      return (
-        acc +
-        (cls.students?.filter((s) => s.avgScore >= 90 && s.avgScore <= 100)
-          .length || 0)
-      );
-    }, 0);
-    const gradeB = classes.reduce((acc, cls) => {
-      return (
-        acc +
-        (cls.students?.filter((s) => s.avgScore >= 80 && s.avgScore < 90)
-          .length || 0)
-      );
-    }, 0);
-    const gradeC = classes.reduce((acc, cls) => {
-      return (
-        acc +
-        (cls.students?.filter((s) => s.avgScore >= 70 && s.avgScore < 80)
-          .length || 0)
-      );
-    }, 0);
-    const gradeD = classes.reduce((acc, cls) => {
-      return (
-        acc +
-        (cls.students?.filter((s) => s.avgScore >= 60 && s.avgScore < 70)
-          .length || 0)
-      );
-    }, 0);
-    const gradeF = classes.reduce((acc, cls) => {
-      return (
-        acc +
-        (cls.students?.filter((s) => s.avgScore < 60 && s.avgScore > 0)
-          .length || 0)
-      );
-    }, 0);
-
-    return (
-      <div className="space-y-4 sm:space-y-6">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-emerald-100/50">
-            <p className="text-xs sm:text-sm text-gray-500">Average Score</p>
-            <p className="text-2xl font-bold text-emerald-900">
-              {avgScore.toFixed(1)}%
-            </p>
-            <p className="text-xs text-emerald-600">
-              <FaChartLine className="inline mr-1" />
-              {studentsWithScores} students
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-noon-warm/30">
-            <p className="text-xs sm:text-sm text-gray-500">Pass Rate</p>
-            <p className="text-2xl font-bold text-noon-warm">
-              {totalGraded > 0 ? Math.round((passed / totalGraded) * 100) : 0}%
-            </p>
-            <p className="text-xs text-noon-warm">
-              <FaChartLine className="inline mr-1" />
-              {passed} passed / {failed} failed
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-ocean-blue/30">
-            <p className="text-xs sm:text-sm text-gray-500">Total Quizzes</p>
-            <p className="text-2xl font-bold text-ocean-blue">{totalQuizzes}</p>
-            <p className="text-xs text-ocean-blue">
-              <FaChartLine className="inline mr-1" />
-              {classes.length} classes
-            </p>
-          </div>
-          <div className="bg-white rounded-xl p-4 shadow-sm border border-purple-200">
-            <p className="text-xs sm:text-sm text-gray-500">Total Students</p>
-            <p className="text-lg font-bold text-purple-600">{totalStudents}</p>
-            <p className="text-xs text-purple-600">
-              <FaStar className="inline mr-1" />
-              {totalGraded} graded
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-            <h3 className="font-bold text-gray-800 mb-4">
-              Performance Summary
-            </h3>
-            <div className="space-y-3">
-              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                <span className="text-sm text-gray-600">Average Score</span>
-                <span className="text-sm font-bold text-emerald-600">
-                  {avgScore.toFixed(1)}%
-                </span>
-              </div>
-              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                <span className="text-sm text-gray-600">Pass Rate</span>
-                <span className="text-sm font-bold text-blue-600">
-                  {totalGraded > 0 ?
-                    Math.round((passed / totalGraded) * 100)
-                  : 0}
-                  %
-                </span>
-              </div>
-              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                <span className="text-sm text-gray-600">Total Graded</span>
-                <span className="text-sm font-bold text-purple-600">
-                  {totalGraded} students
-                </span>
-              </div>
-              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                <span className="text-sm text-gray-600">Pending</span>
-                <span className="text-sm font-bold text-amber-600">
-                  {pendingChecks} students
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-            <h3 className="font-bold text-gray-800 mb-4">Grade Distribution</h3>
-            <div className="space-y-3">
-              {totalGraded > 0 ?
-                <>
-                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">A (90-100%)</span>
-                    <span className="text-sm font-bold text-green-600">
-                      {gradeA}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">B (80-89%)</span>
-                    <span className="text-sm font-bold text-blue-600">
-                      {gradeB}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">C (70-79%)</span>
-                    <span className="text-sm font-bold text-yellow-600">
-                      {gradeC}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">D (60-69%)</span>
-                    <span className="text-sm font-bold text-orange-600">
-                      {gradeD}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
-                    <span className="text-sm text-gray-600">F (Below 60%)</span>
-                    <span className="text-sm font-bold text-red-600">
-                      {gradeF}
-                    </span>
-                  </div>
-                </>
-              : <p className="text-center text-gray-500 py-4">
-                  No grades available yet
-                </p>
-              }
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
+  // ── JSX ──────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50/50 via-seashell-white to-noon-warm/5">
-      {/* Top Navigation */}
       <nav className="bg-white/95 backdrop-blur-sm shadow-sm border-b border-emerald-100/50 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 py-3 sm:py-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1682,21 +1017,19 @@ const Dashboard = () => {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-4">
-              <button className="relative p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition">
-                <FaBell className="text-base sm:text-lg" />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-              </button>
-              <button className="hidden sm:block p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition">
-                <FaCog className="text-lg" />
-              </button>
-              <div className="flex items-center gap-2 sm:gap-3">
+              <NotificationDropdown classes={classes} />
+
+              <button
+                onClick={() => setShowProfile(true)}
+                className="flex items-center gap-2 sm:gap-3 hover:opacity-80 transition"
+                title="Profile">
                 {user?.photoURL ?
                   <img
                     src={user.photoURL}
                     alt="User"
-                    className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-emerald-200"
+                    className="w-8 h-8 sm:w-10 sm:h-10 rounded-full border-2 border-emerald-200 cursor-pointer"
                   />
-                : <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-emerald-100 to-emerald-200 flex items-center justify-center">
+                : <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-br from-emerald-100 to-emerald-200 flex items-center justify-center cursor-pointer">
                     <FaUser className="text-emerald-600 text-sm sm:text-base" />
                   </div>
                 }
@@ -1706,7 +1039,8 @@ const Dashboard = () => {
                   </p>
                   <p className="text-xs text-emerald-600">Teacher</p>
                 </div>
-              </div>
+              </button>
+
               <button
                 onClick={handleLogoutClick}
                 disabled={isLoggingOut}
@@ -1727,13 +1061,26 @@ const Dashboard = () => {
         </div>
       </nav>
 
-      {/* Main Content */}
+      {/* Profile Modal */}
+      {showProfile && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex min-h-screen items-center justify-center p-4">
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => setShowProfile(false)}
+            />
+            <div className="relative w-full max-w-2xl">
+              <Profile onClose={() => setShowProfile(false)} />
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto px-4 py-4 sm:py-8">
-        {/* Welcome Banner */}
         {activeTab !== "quiz-details" && (
           <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-4 sm:p-6 mb-6 sm:mb-8 text-white relative overflow-hidden">
-            <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24"></div>
-            <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full -ml-16 -mb-16"></div>
+            <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24" />
+            <div className="absolute bottom-0 left-0 w-32 h-32 bg-white/5 rounded-full -ml-16 -mb-16" />
             <div className="relative z-10">
               <h2 className="text-lg sm:text-2xl font-bold">
                 Welcome back, {user?.displayName?.split(" ")[0] || "Teacher"}!
@@ -1746,8 +1093,7 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Navigation Tabs */}
-        {activeTab !== "quiz-details" ?
+        {activeTab !== "quiz-details" && (
           <div className="flex flex-wrap gap-1 sm:gap-2 mb-6 sm:mb-8 bg-white rounded-xl p-1 shadow-sm border border-emerald-100/50">
             {[
               { id: "overview", label: "Overview", icon: FaHome },
@@ -1768,13 +1114,11 @@ const Dashboard = () => {
               </button>
             ))}
           </div>
-        : null}
+        )}
 
-        {/* Tab Content */}
         {renderContent()}
       </div>
 
-      {/* Alert Component */}
       <Alert
         type={alert.type}
         message={alert.message}
@@ -1782,7 +1126,6 @@ const Dashboard = () => {
         duration={3000}
       />
 
-      {/* Image Delete Confirmation Modal */}
       <ConfirmDeleteModal
         isOpen={showImageDeleteModal}
         onClose={handleImageDeleteCancel}
@@ -1792,7 +1135,6 @@ const Dashboard = () => {
         type="image"
       />
 
-      {/* Compare Student Modal */}
       <CompareStudentModal
         isOpen={compareModalOpen}
         onClose={() => {
@@ -1804,14 +1146,12 @@ const Dashboard = () => {
         quizTitle={selectedQuizForCompare?.title || ""}
         answerKeyUrl={answerKeyUrl}
         onCompareComplete={(score, details) => {
-          if (selectedStudent) {
+          if (selectedStudent)
             handleStudentScoreUpdate(selectedStudent.id, score, details);
-          }
         }}
         loading={updatingStudentScore}
       />
 
-      {/* Modals */}
       <AddClassModal
         key={classToEdit?.id || "add-new"}
         isOpen={showAddClassModal}
