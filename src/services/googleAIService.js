@@ -3,11 +3,12 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GOOGLE_AI_API_KEY);
 
-const MODEL_NAME = "gemini-1.5-flash"; // free tier
+// ✅ FIXED: Use "gemini-pro" which is the most stable and widely available
+const MODEL_NAME = "gemini-pro";
 
 const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-// Vision model — same free-tier flash model, tuned for accuracy over speed
+// Vision model — using the same stable model
 const visionModel = genAI.getGenerativeModel({
   model: MODEL_NAME,
   generationConfig: {
