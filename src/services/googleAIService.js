@@ -5,143 +5,20 @@ const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GOOGLE_AI_API_KEY);
 
 // ─── Model Configuration ─────────────────────────────────────────────────────
 
-// List of available models from your region
-const AVAILABLE_MODELS = [
-  "gemini-2.0-flash", // Fast, reliable (recommended)
-  "gemini-2.5-flash", // Newer flash model
-  "gemini-2.0-flash-lite", // Lightweight, faster
-  "gemini-flash-latest", // Always latest flash
-  "gemini-pro-latest", // Latest pro model
-  "gemini-2.0-flash-001", // Specific version
-  "gemini-2.5-pro", // Best quality (slower)
-];
+// Using gemini-2.0-flash - Fast, reliable, and available in your region
+const MODEL_NAME = "gemini-2.0-flash";
 
-// Current active model - will be set by findWorkingModel()
-let activeModel = null;
-let modelInstance = null;
-let visionModelInstance = null;
+const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
-// ─── Model Management Functions ─────────────────────────────────────────────
-
-/**
- * Try to find a working model from the available list
- */
-export const findWorkingModel = async () => {
-  console.log("Searching for a working Gemini model...");
-
-  for (const modelName of AVAILABLE_MODELS) {
-    try {
-      const testModel = genAI.getGenerativeModel({ model: modelName });
-      const result = await testModel.generateContent("Hello");
-      await result.response;
-
-      console.log(`Found working model: ${modelName}`);
-      return modelName;
-    } catch (error) {
-      console.log(`${modelName} failed: ${error.message}`);
-    }
-  }
-
-  console.log("No working Gemini model found. Check your API key.");
-  return null;
-};
-
-/**
- * Initialize or switch to a specific model
- */
-export const setModel = (modelName) => {
-  try {
-    const model = genAI.getGenerativeModel({ model: modelName });
-    const visionModel = genAI.getGenerativeModel({
-      model: modelName,
-      generationConfig: {
-        temperature: 0.1,
-        topK: 1,
-        topP: 1,
-        maxOutputTokens: 2048,
-      },
-    });
-
-    activeModel = modelName;
-    modelInstance = model;
-    visionModelInstance = visionModel;
-
-    console.log(`Switched to model: ${modelName}`);
-    return true;
-  } catch (error) {
-    console.error(`Failed to set model ${modelName}:`, error);
-    return false;
-  }
-};
-
-/**
- * Get the current active model instance
- */
-const getModel = async () => {
-  if (!activeModel || !modelInstance) {
-    const workingModel = await findWorkingModel();
-    if (workingModel) {
-      setModel(workingModel);
-    } else {
-      throw new Error("No AI model available. Please check your API key.");
-    }
-  }
-
-  return {
-    model: modelInstance,
-    visionModel: visionModelInstance,
-    modelName: activeModel,
-  };
-};
-
-/**
- * List all available models
- */
-export const listAvailableModels = async () => {
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${import.meta.env.VITE_GOOGLE_AI_API_KEY}`,
-    );
-    const data = await response.json();
-
-    if (data.models) {
-      const geminiModels = data.models.filter((m) => m.name.includes("gemini"));
-      console.log("Available Gemini Models:");
-      console.log("=================================");
-      geminiModels.forEach((model) => {
-        console.log(model.name);
-      });
-      return geminiModels;
-    }
-    return [];
-  } catch (error) {
-    console.error("Failed to list models:", error);
-    return [];
-  }
-};
-
-/**
- * Get the current model name
- */
-export const getCurrentModel = () => {
-  return activeModel || "Not initialized";
-};
-
-// ─── Initialize with best available model ──────────────────────────────────
-
-// Auto-initialize on import
-(async function initModel() {
-  const workingModel = await findWorkingModel();
-  if (workingModel) {
-    setModel(workingModel);
-  } else {
-    try {
-      setModel("gemini-2.0-flash");
-    } catch (e) {
-      console.warn("No AI model available. Some features may not work.");
-    }
-  }
-})();
+const visionModel = genAI.getGenerativeModel({
+  model: MODEL_NAME,
+  generationConfig: {
+    temperature: 0.1,
+    topK: 1,
+    topP: 1,
+    maxOutputTokens: 2048,
+  },
+});
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
@@ -169,7 +46,6 @@ const fileToGenerativePart = async (file) =>
  */
 export const extractAnswersFromImage = async (imageFile) => {
   try {
-    const { visionModel } = await getModel();
     const imagePart = await fileToGenerativePart(imageFile);
 
     const prompt = `
@@ -212,7 +88,6 @@ export const compareAnswersWithGemini = async (
   studentSheetImage,
 ) => {
   try {
-    const { visionModel, modelName } = await getModel();
     const answerKeyPart = await fileToGenerativePart(answerKeyImage);
     const studentSheetPart = await fileToGenerativePart(studentSheetImage);
 
@@ -268,7 +143,6 @@ export const generateStudentFeedback = async (
   details,
 ) => {
   try {
-    const { model } = await getModel();
     const prompt = `
 Generate personalized feedback for a student based on their quiz performance.
 
@@ -311,7 +185,6 @@ Return ONLY valid JSON:
  */
 export const analyzeClassPerformance = async (classData) => {
   try {
-    const { model } = await getModel();
     const prompt = `
 Analyze the following class performance data and provide insights:
 
@@ -348,7 +221,6 @@ export const generateQuizFromTopic = async (
   difficulty = "medium",
 ) => {
   try {
-    const { model } = await getModel();
     const prompt = `
 Generate a quiz on the topic: "${topic}"
 
@@ -387,7 +259,6 @@ Return ONLY valid JSON:
  */
 export const analyzeQuizResults = async (quizData) => {
   try {
-    const { model } = await getModel();
     const prompt = `
 You are an AI assistant that analyzes quiz results and provides insights for teachers.
 
@@ -431,10 +302,6 @@ Return ONLY valid JSON:
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 export default {
-  listAvailableModels,
-  findWorkingModel,
-  setModel,
-  getCurrentModel,
   extractAnswersFromImage,
   compareAnswersWithGemini,
   generateStudentFeedback,
