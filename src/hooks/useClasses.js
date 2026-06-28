@@ -149,6 +149,7 @@ export const useClasses = () => {
           quizzesTaken: 0,
           avgScore: 0,
           status: "Active",
+          quizScores: {}, // Add this to store individual quiz scores
         };
 
         const result = await firestoreService.addStudentToClass(
@@ -267,6 +268,81 @@ export const useClasses = () => {
     [teacherId],
   );
 
+  // NEW: Update student score after quiz comparison
+  const updateStudentScore = useCallback(
+    async (classId, studentId, quizId, score, details) => {
+      if (!teacherId) return { success: false, error: "No teacher logged in" };
+
+      setActionLoading(true);
+      try {
+        // Find the class and student
+        const classData = classes.find((c) => c.id === classId);
+        if (!classData) {
+          return { success: false, error: "Class not found" };
+        }
+
+        const student = classData.students?.find((s) => s.id === studentId);
+        if (!student) {
+          return { success: false, error: "Student not found" };
+        }
+
+        // Prepare the updated student data
+        const quizScores = student.quizScores || {};
+        quizScores[quizId] = {
+          score,
+          details,
+          date: new Date().toISOString(),
+        };
+
+        // Calculate new average
+        const scores = Object.values(quizScores).map((q) => q.score);
+        const avgScore =
+          scores.length > 0 ?
+            Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
+          : 0;
+
+        const updatedStudent = {
+          ...student,
+          quizScores,
+          avgScore,
+          quizzesTaken: scores.length,
+          lastUpdated: new Date().toISOString(),
+        };
+
+        // Update in Firestore using the existing updateStudentInClass function
+        const result = await firestoreService.updateStudentInClass(
+          classId,
+          studentId,
+          updatedStudent,
+        );
+
+        if (result.success) {
+          // Update local state
+          setClasses((prev) =>
+            prev.map((c) =>
+              c.id === classId ?
+                {
+                  ...c,
+                  students: (c.students || []).map((s) =>
+                    s.id === studentId ? updatedStudent : s,
+                  ),
+                }
+              : c,
+            ),
+          );
+          return { success: true, student: updatedStudent };
+        }
+        return { success: false, error: result.error };
+      } catch (error) {
+        console.error("Error in updateStudentScore:", error);
+        return { success: false, error: error.message };
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [teacherId, classes],
+  );
+
   const addQuiz = useCallback(
     async (classId, quizData) => {
       if (!teacherId) return { success: false, error: "No teacher logged in" };
@@ -284,6 +360,7 @@ export const useClasses = () => {
           totalQuestions: parseInt(quizData.totalQuestions) || 10,
           status: quizData.status || "active",
           createdAt: new Date().toISOString(),
+          checkedStudents: [], // Track which students have been checked
         };
 
         const result = await firestoreService.addQuizToClass(classId, newQuiz);
@@ -393,6 +470,43 @@ export const useClasses = () => {
     [teacherId],
   );
 
+  const updateQuiz = useCallback(
+    async (classId, quizId, quizData) => {
+      if (!teacherId) return { success: false, error: "No teacher logged in" };
+
+      setActionLoading(true);
+      try {
+        const result = await firestoreService.updateQuizInClass(
+          classId,
+          quizId,
+          quizData,
+        );
+        if (result.success) {
+          setClasses((prev) =>
+            prev.map((c) =>
+              c.id === classId ?
+                {
+                  ...c,
+                  quizzes: (c.quizzes || []).map((q) =>
+                    q.id === quizId ? { ...q, ...quizData } : q,
+                  ),
+                }
+              : c,
+            ),
+          );
+          return { success: true };
+        }
+        return { success: false, error: result.error };
+      } catch (error) {
+        console.error("Error in updateQuiz:", error);
+        return { success: false, error: error.message };
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [teacherId],
+  );
+
   const getClassById = useCallback(
     (classId) => {
       return classes.find((c) => c.id === classId) || null;
@@ -410,9 +524,14 @@ export const useClasses = () => {
     addStudent,
     removeStudent,
     editStudent,
+    updateStudentScore, // Add this to the return object
     addQuiz,
     editQuiz,
     deleteQuiz,
+    updateQuiz,
+
     getClassById,
   };
 };
+
+export default useClasses;

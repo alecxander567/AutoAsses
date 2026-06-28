@@ -1,4 +1,4 @@
-// src/pages/Dashboard.jsx
+// src/pages/Dashboard.jsx - Updated imports section
 import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -35,6 +35,7 @@ import {
   FaGraduationCap,
   FaChartPie,
   FaStar,
+  FaExchangeAlt,
 } from "react-icons/fa";
 import { useAuthActions } from "../hooks/useAuthActions";
 import { useClasses } from "../hooks/useClasses";
@@ -48,6 +49,7 @@ import Alert from "../components/Alert";
 import QuizCard from "../components/QuizCard";
 import AddQuizModal from "../components/AddQuizModal";
 import LoadingSpinner from "../components/LoadingSpinner";
+import CompareStudentModal from "../components/CompareStudentModal";
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -65,7 +67,9 @@ const Dashboard = () => {
     addQuiz,
     editQuiz,
     deleteQuiz,
+    updateQuiz,
     getClassById,
+    updateStudentScore,
   } = useClasses();
   const [activeTab, setActiveTab] = useState("overview");
   const [searchQuery, setSearchQuery] = useState("");
@@ -92,6 +96,12 @@ const Dashboard = () => {
   // State for logout loading
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
+  // State for compare modal
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedQuizForCompare, setSelectedQuizForCompare] = useState(null);
+  const [updatingStudentScore, setUpdatingStudentScore] = useState(false);
+
   // Use the upload hook
   const {
     answerKeyUrl,
@@ -100,6 +110,7 @@ const Dashboard = () => {
     uploadAnswerKey,
     deleteAnswerKey,
     resetUpload,
+    setAnswerKeyUrl,
   } = useUploadAnswerKey();
 
   const fileInputRef = useRef(null);
@@ -162,7 +173,13 @@ const Dashboard = () => {
 
   const handleViewQuiz = (quiz) => {
     setSelectedQuiz(quiz);
-    resetUpload();
+    setSelectedClassId(quiz.classId);
+    // Load stored answer key URL if it exists
+    if (quiz.answerKeyUrl) {
+      setAnswerKeyUrl(quiz.answerKeyUrl);
+    } else {
+      resetUpload();
+    }
     setActiveTab("quiz-details");
   };
 
@@ -276,6 +293,12 @@ const Dashboard = () => {
     setIsDeletingImage(true);
     try {
       await deleteAnswerKey();
+      // Also remove the answerKeyUrl from the quiz in Firestore
+      if (selectedClassId && selectedQuiz) {
+        await updateQuiz(selectedClassId, selectedQuiz.id, {
+          answerKeyUrl: null,
+        });
+      }
       setShowImageDeleteModal(false);
       setIsDeletingImage(false);
       showAlert("success", "Image deleted successfully!");
@@ -292,6 +315,43 @@ const Dashboard = () => {
 
   const handleImageDeleteCancel = () => {
     setShowImageDeleteModal(false);
+  };
+
+  // Student score update handler
+  const handleStudentScoreUpdate = async (studentId, score, details) => {
+    setUpdatingStudentScore(true);
+    try {
+      if (selectedClassId && selectedQuizForCompare) {
+        const result = await updateStudentScore(
+          selectedClassId,
+          studentId,
+          selectedQuizForCompare.id,
+          score,
+          details,
+        );
+
+        if (result.success) {
+          showAlert(
+            "success",
+            `Score of ${score}% recorded for ${selectedStudent?.name}`,
+          );
+        } else {
+          showAlert("error", "Failed to update student score");
+        }
+      }
+    } catch (error) {
+      console.error("Error updating student score:", error);
+      showAlert("error", "Failed to update student score");
+    } finally {
+      setUpdatingStudentScore(false);
+    }
+  };
+
+  // Handle compare student
+  const handleCompareStudent = (student, quiz) => {
+    setSelectedStudent(student);
+    setSelectedQuizForCompare(quiz);
+    setCompareModalOpen(true);
   };
 
   // Calculate real stats from classes
@@ -468,7 +528,13 @@ const Dashboard = () => {
       if (!file) return;
 
       try {
-        await uploadAnswerKey(file);
+        const url = await uploadAnswerKey(file);
+        // Save the answer key URL to the quiz in Firestore
+        if (url && selectedClassId && selectedQuiz) {
+          await updateQuiz(selectedClassId, selectedQuiz.id, {
+            answerKeyUrl: url,
+          });
+        }
         showAlert("success", "Image uploaded successfully!");
       } catch (error) {
         console.error("Upload failed:", error);
@@ -519,10 +585,10 @@ const Dashboard = () => {
                   {students.map((student) => (
                     <div
                       key={student.id}
-                      className="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm">
+                      className="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm hover:shadow-md transition">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
-                          <FaEye className="text-emerald-600 text-sm" />
+                          <FaUser className="text-emerald-600 text-sm" />
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-700">
@@ -535,13 +601,48 @@ const Dashboard = () => {
                           )}
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-bold text-emerald-600">
-                          {student.avgScore ? `${student.avgScore}%` : "—"}
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          {student.quizzesTaken || 0} quizzes
-                        </p>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          {(() => {
+                            // Show THIS quiz's score, not the student's
+                            // cross-quiz average -- avgScore mixes in
+                            // results from other quizzes, which doesn't
+                            // make sense while looking at one quiz's
+                            // details specifically.
+                            const quizResult = student.quizScores?.[quiz.id];
+                            if (!quizResult) {
+                              return (
+                                <p className="text-xs text-gray-400">
+                                  Not graded yet
+                                </p>
+                              );
+                            }
+                            const details = quizResult.details || [];
+                            const total = details.length;
+                            const correct = details.filter(
+                              (d) => d.isCorrect,
+                            ).length;
+                            return (
+                              <>
+                                <p className="text-sm font-bold text-emerald-600">
+                                  {quizResult.score}%{" "}
+                                  <span className="text-xs font-medium text-emerald-500">
+                                    ({correct}/{total})
+                                  </span>
+                                </p>
+                                <p className="text-xs text-gray-400">
+                                  this quiz
+                                </p>
+                              </>
+                            );
+                          })()}
+                        </div>
+                        <button
+                          onClick={() => handleCompareStudent(student, quiz)}
+                          className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs transition flex items-center gap-1">
+                          <FaExchangeAlt className="text-xs" />
+                          Compare
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -557,6 +658,37 @@ const Dashboard = () => {
                 <FaFileImage className="text-noon-warm" />
                 Answer Key Upload
               </h3>
+
+              {/* Important Notice */}
+              <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4">
+                <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
+                <div className="space-y-2">
+                  <p className="font-semibold text-amber-800 text-sm">
+                    Important — Before You Upload
+                  </p>
+                  <ul className="space-y-1 text-amber-700 text-xs leading-relaxed">
+                    <li>
+                      <span className="font-medium">Accepted formats:</span>{" "}
+                      PNG, JPG, and JPEG only. PDFs are not supported.
+                    </li>
+                    <li>
+                      <span className="font-medium">Max file size:</span> 10 MB
+                      per image.
+                    </li>
+                    <li>
+                      <span className="font-medium">Rate limit:</span> Up to{" "}
+                      <span className="font-medium">10 uploads per minute</span>
+                      . Exceeding this will temporarily pause uploads — wait a
+                      moment and retry.
+                    </li>
+                    <li>
+                      <span className="font-medium">Image quality:</span> Use a
+                      clear, flat, well-lit photo of the answer key for best OCR
+                      accuracy.
+                    </li>
+                  </ul>
+                </div>
+              </div>
 
               {/* Hidden file input */}
               <input
@@ -618,15 +750,6 @@ const Dashboard = () => {
                     }
                   </button>
                 )}
-
-                <button
-                  onClick={() => {
-                    showAlert("success", `Checking quiz: ${quiz.title}`);
-                  }}
-                  className={`${answerKeyUrl ? "flex-1" : "w-full"} bg-gradient-to-r from-emerald-600 to-emerald-500 text-white px-4 py-2 rounded-lg hover:shadow-lg transition-all flex items-center justify-center gap-2 font-medium`}>
-                  <FaCheck className="text-sm" />
-                  Check
-                </button>
               </div>
             </div>
           </div>
@@ -973,6 +1096,10 @@ const Dashboard = () => {
                     });
                   }}
                   onView={handleViewQuiz}
+                  onCompare={(quiz) => {
+                    // Navigate to quiz details to compare students
+                    handleViewQuiz(quiz);
+                  }}
                   loading={actionLoading}
                 />
               ))}
@@ -1296,6 +1423,25 @@ const Dashboard = () => {
         className="Answer Key Image"
         loading={isDeletingImage}
         type="image"
+      />
+
+      {/* Compare Student Modal */}
+      <CompareStudentModal
+        isOpen={compareModalOpen}
+        onClose={() => {
+          setCompareModalOpen(false);
+          setSelectedStudent(null);
+          setSelectedQuizForCompare(null);
+        }}
+        student={selectedStudent}
+        quizTitle={selectedQuizForCompare?.title || ""}
+        answerKeyUrl={answerKeyUrl}
+        onCompareComplete={(score, details) => {
+          if (selectedStudent) {
+            handleStudentScoreUpdate(selectedStudent.id, score, details);
+          }
+        }}
+        loading={updatingStudentScore}
       />
 
       {/* Modals */}

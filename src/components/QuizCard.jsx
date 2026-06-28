@@ -5,6 +5,7 @@ import {
   FaEye,
   FaCalendarAlt,
   FaQuestionCircle,
+  FaUsers,
 } from "react-icons/fa";
 
 const QuizCard = ({
@@ -13,7 +14,13 @@ const QuizCard = ({
   onDelete,
   onView,
   loading = false,
+  studentCount = 0,
 }) => {
+  // If quiz is undefined or null, return null
+  if (!quiz) {
+    return null;
+  }
+
   const getStatusColor = (status) => {
     switch (status) {
       case "active":
@@ -51,7 +58,9 @@ const QuizCard = ({
           {getStatusLabel(quiz.status)}
         </span>
       </div>
-      <h4 className="font-semibold text-gray-800">{quiz.title}</h4>
+      <h4 className="font-semibold text-gray-800">
+        {quiz.title || "Untitled Quiz"}
+      </h4>
       {quiz.description && (
         <p className="text-sm text-gray-500 mt-1 line-clamp-2">
           {quiz.description}
@@ -66,23 +75,29 @@ const QuizCard = ({
           <FaQuestionCircle className="text-xs" />
           {quiz.totalQuestions || 0} questions
         </span>
+        {studentCount > 0 && (
+          <span className="flex items-center gap-1">
+            <FaUsers className="text-xs" />
+            {studentCount} students
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
         <button
-          onClick={() => onView(quiz)}
+          onClick={() => onView && onView(quiz)}
           className="flex-1 text-sm text-emerald-600 hover:text-emerald-800 font-medium flex items-center justify-center gap-1">
           <FaEye className="text-xs" />
           View Details
         </button>
         <button
-          onClick={() => onEdit(quiz)}
+          onClick={() => onEdit && onEdit(quiz)}
           disabled={loading}
           className="p-1.5 text-gray-400 hover:text-emerald-600 transition disabled:opacity-50"
           title="Edit quiz">
           <FaEdit className="text-sm" />
         </button>
         <button
-          onClick={() => onDelete(quiz.id)}
+          onClick={() => onDelete && onDelete(quiz.id)}
           disabled={loading}
           className="p-1.5 text-gray-400 hover:text-red-600 transition disabled:opacity-50"
           title="Delete quiz">

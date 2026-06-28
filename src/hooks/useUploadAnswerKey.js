@@ -193,5 +193,9 @@ export const useUploadAnswerKey = () => {
     uploadAnswerKey,
     deleteAnswerKey,
     resetUpload,
+    setAnswerKeyUrl, // FIX: was missing -- Dashboard.jsx's handleViewQuiz
+    // destructures and calls this directly to load a quiz's stored
+    // answerKeyUrl, which threw "setAnswerKeyUrl is not a function"
+    // because it was undefined (never returned from this hook).
   };
 };
