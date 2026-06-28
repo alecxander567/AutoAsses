@@ -332,6 +332,14 @@ const Dashboard = () => {
   const handleViewClass = (classId) => setSelectedClassId(classId);
   const handleBackToClasses = () => setSelectedClassId(null);
 
+  // FIX: "Manage Students" goes to the Students tab showing the CLASS LIST,
+  // not a specific class's student list. selectedClassId is intentionally
+  // cleared so StudentsTab renders the top-level class picker.
+  const handleManageStudents = () => {
+    setSelectedClassId(null);
+    setActiveTab("students");
+  };
+
   const handleRequestDelete = (classId) => {
     setClassToDelete(classes.find((c) => c.id === classId));
   };
@@ -418,9 +426,6 @@ const Dashboard = () => {
     return result;
   };
 
-  // NOTE: declared with useCallback, and BEFORE the effect below that
-  // references it, so the window bridge always closes over a stable,
-  // up-to-date function instead of a stale one.
   const handleViewQuiz = useCallback(
     (quiz) => {
       setQuizAnalysis(null);
@@ -442,9 +447,6 @@ const Dashboard = () => {
     setActiveTab("quizzes");
   };
 
-  // Expose handlers for NotificationDropdown window callbacks.
-  // Moved here (after handleViewQuiz is declared) to fix the
-  // "accessed before declaration" / stale-closure issue.
   useEffect(() => {
     window.handleViewQuizFromNotification = (quiz) => handleViewQuiz(quiz);
     window.setActiveTabFromNotification = (tab) => setActiveTab(tab);
@@ -820,6 +822,7 @@ const Dashboard = () => {
                 Answer Key Upload
               </h3>
 
+              {/* Updated rate limit note for Gemini Flash */}
               <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4">
                 <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
                 <div className="space-y-2">
@@ -836,15 +839,18 @@ const Dashboard = () => {
                       per image.
                     </li>
                     <li>
-                      <span className="font-medium">Rate limit:</span> Up to{" "}
-                      <span className="font-medium">10 uploads per minute</span>
-                      . Exceeding this will temporarily pause uploads — wait a
-                      moment and retry.
+                      <span className="font-medium">Rate limit:</span> Gemini
+                      Flash allows{" "}
+                      <span className="font-medium">
+                        15 requests per minute
+                      </span>{" "}
+                      on the free tier. If you hit the limit, wait a moment and
+                      retry.
                     </li>
                     <li>
                       <span className="font-medium">Image quality:</span> Use a
-                      clear, flat, well-lit photo of the answer key for best OCR
-                      accuracy.
+                      clear, flat, well-lit photo of the answer key for best
+                      results.
                     </li>
                   </ul>
                 </div>
@@ -883,7 +889,9 @@ const Dashboard = () => {
                     <p className="text-sm text-gray-600">
                       Click to select an image from your computer
                     </p>
-                    <p className="text-xs text-gray-400">PNG, JPG up to 10MB</p>
+                    <p className="text-xs text-gray-400">
+                      PNG, JPG up to 10 MB
+                    </p>
                   </div>
                 }
               </div>
@@ -933,6 +941,9 @@ const Dashboard = () => {
       setActiveTab={setActiveTab}
       setShowAddClassModal={setShowAddClassModal}
       handleViewQuiz={handleViewQuiz}
+      // Pass this so OverviewTab's "Manage Students" button clears
+      // selectedClassId and lands on the class list, not a student list.
+      handleManageStudents={handleManageStudents}
     />
   );
 
@@ -1061,7 +1072,6 @@ const Dashboard = () => {
         </div>
       </nav>
 
-      {/* Profile Modal */}
       {showProfile && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex min-h-screen items-center justify-center p-4">
@@ -1103,7 +1113,14 @@ const Dashboard = () => {
             ].map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => {
+                  // When clicking the Students tab from the nav, always
+                  // reset to the class list (not a specific class's students).
+                  if (tab.id === "students") {
+                    setSelectedClassId(null);
+                  }
+                  setActiveTab(tab.id);
+                }}
                 className={`flex-1 flex items-center justify-center gap-1 sm:gap-2 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition ${
                   activeTab === tab.id ?
                     "bg-emerald-600 text-white shadow-md"

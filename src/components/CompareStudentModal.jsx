@@ -14,9 +14,7 @@ import {
   FaGraduationCap,
   FaChartPie,
 } from "react-icons/fa";
-import { createWorker } from "tesseract.js";
-
-const MIN_WORD_CONFIDENCE = 55;
+import { compareAnswersWithGemini } from "../services/googleAIService";
 
 const CompareStudentModal = ({
   isOpen,
@@ -32,235 +30,28 @@ const CompareStudentModal = ({
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
-  const workerRef = useRef(null);
 
-  const configureWorker = async (worker) => {
-    await worker.setParameters({
-      tessedit_char_whitelist: "0123456789ABCD.) ",
-      tessedit_pageseg_mode: "11",
-    });
-  };
-
-  useEffect(() => {
-    if (isOpen && !workerRef.current) {
-      (async () => {
-        try {
-          const worker = await createWorker("eng");
-          await configureWorker(worker);
-          workerRef.current = worker;
-        } catch (err) {
-          console.error("Failed to initialize OCR worker:", err);
-        }
-      })();
-    }
-
-    return () => {
-      if (!isOpen && workerRef.current) {
-        workerRef.current.terminate();
-        workerRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
-
+  // Clean up preview URL on unmount
   useEffect(() => {
     return () => {
-      if (workerRef.current) {
-        workerRef.current.terminate();
-        workerRef.current = null;
-      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
-  }, []);
-
-  const preprocessImage = (file) => {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-
-      img.onload = () => {
-        try {
-          const scale = img.width < 1200 ? 1200 / img.width : 1;
-          const canvas = document.createElement("canvas");
-          canvas.width = Math.round(img.width * scale);
-          canvas.height = Math.round(img.height * scale);
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const data = imageData.data;
-
-          const threshold = 150;
-          for (let i = 0; i < data.length; i += 4) {
-            const gray =
-              data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-            const value = gray < threshold ? 0 : 255;
-            data[i] = data[i + 1] = data[i + 2] = value;
-          }
-          ctx.putImageData(imageData, 0, 0);
-
-          canvas.toBlob((blob) => {
-            URL.revokeObjectURL(url);
-            if (!blob) {
-              reject(new Error("Failed to preprocess image"));
-              return;
-            }
-            resolve(
-              new File([blob], file.name || "processed.png", {
-                type: "image/png",
-              }),
-            );
-          }, "image/png");
-        } catch (err) {
-          URL.revokeObjectURL(url);
-          reject(err);
-        }
-      };
-
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("Failed to load image for preprocessing"));
-      };
-
-      img.src = url;
-    });
-  };
-
-  const extractTextFromImage = async (imageSource) => {
-    try {
-      if (!workerRef.current) {
-        workerRef.current = await createWorker("eng");
-        await configureWorker(workerRef.current);
-      }
-      const processed = await preprocessImage(imageSource);
-      const { data } = await workerRef.current.recognize(processed);
-      return { text: data.text, words: data.words || [] };
-    } catch (err) {
-      console.error("OCR Error:", err);
-      return { text: "", words: [] };
-    }
-  };
-
-  const parseAnswers = (text, words) => {
-    const answers = {};
-    const lines = text.split("\n");
-
-    for (const line of lines) {
-      const match = line.match(/^\s*(\d{1,2})[.):]?\s*([A-D])/i);
-      if (match) {
-        const questionNumber = parseInt(match[1], 10);
-        const letter = match[2].toUpperCase();
-
-        const matchingWord = words.find(
-          (w) => w.text && w.text.toUpperCase().includes(letter),
-        );
-        if (matchingWord && matchingWord.confidence < MIN_WORD_CONFIDENCE) {
-          answers[questionNumber] = null;
-        } else {
-          answers[questionNumber] = letter;
-        }
-        continue;
-      }
-
-      const blankMatch = line.match(/^\s*(\d{1,2})[.):]?\s*$/);
-      if (blankMatch) {
-        answers[parseInt(blankMatch[1], 10)] = null;
-      }
-    }
-
-    return answers;
-  };
-
-  const compareAnswers = (answerKeyResult, studentResult) => {
-    const answerKeyMap = parseAnswers(
-      answerKeyResult.text,
-      answerKeyResult.words,
-    );
-    const studentAnswerMap = parseAnswers(
-      studentResult.text,
-      studentResult.words,
-    );
-
-    const questionNumbers = Object.keys(answerKeyMap)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    if (questionNumbers.length === 0) {
-      throw new Error(
-        'Could not read any answers from the answer key image. Make sure it\'s a clear photo of the answer list (e.g. "1. B", "2. D", ...).',
-      );
-    }
-
-    let correct = 0;
-    let total = 0;
-    const details = [];
-
-    questionNumbers.forEach((questionNumber) => {
-      const correctAnswer = answerKeyMap[questionNumber];
-      if (!correctAnswer) return;
-
-      total++;
-
-      // THREE states for student answer:
-      //   string (e.g. "A")  → OCR read a letter
-      //   null               → OCR found the line but answer was blank or low-confidence
-      //   "?"                → OCR found no line at all for this question number
-      const studentAnswer =
-        questionNumber in studentAnswerMap ?
-          studentAnswerMap[questionNumber]
-        : "?";
-
-      const isCorrect = studentAnswer === correctAnswer;
-      if (isCorrect) correct++;
-
-      details.push({
-        questionNumber,
-        studentAnswer,
-        correctAnswer,
-        isCorrect,
-      });
-    });
-
-    const score = total > 0 ? Math.round((correct / total) * 100) : 0;
-    const grade = getGrade(score);
-
-    return { score, correct, total, details, grade };
-  };
+  }, [previewUrl]);
 
   const getGrade = (score) => {
     if (score >= 90)
-      return {
-        letter: "A",
-        color: "text-green-600",
-        bg: "bg-green-100",
-        label: "Excellent!",
-      };
+      return { letter: "A", color: "text-green-600", label: "Excellent!" };
     if (score >= 80)
-      return {
-        letter: "B",
-        color: "text-blue-600",
-        bg: "bg-blue-100",
-        label: "Good Job!",
-      };
+      return { letter: "B", color: "text-blue-600", label: "Good Job!" };
     if (score >= 70)
-      return {
-        letter: "C",
-        color: "text-yellow-600",
-        bg: "bg-yellow-100",
-        label: "Not Bad!",
-      };
+      return { letter: "C", color: "text-yellow-600", label: "Not Bad!" };
     if (score >= 60)
       return {
         letter: "D",
         color: "text-orange-600",
-        bg: "bg-orange-100",
         label: "Need Improvement",
       };
-    return {
-      letter: "F",
-      color: "text-red-600",
-      bg: "bg-red-100",
-      label: "Needs More Practice",
-    };
+    return { letter: "F", color: "text-red-600", label: "Needs More Practice" };
   };
 
   const handleFileSelect = (event) => {
@@ -271,9 +62,8 @@ const CompareStudentModal = ({
       setError("Please select an image file (PNG, JPG, etc.)");
       return;
     }
-
     if (file.size > 10 * 1024 * 1024) {
-      setError("File size exceeds 10MB limit");
+      setError("File size exceeds 10 MB limit");
       return;
     }
 
@@ -285,8 +75,6 @@ const CompareStudentModal = ({
     reader.onloadend = () => setPreviewUrl(reader.result);
     reader.readAsDataURL(file);
   };
-
-  const handleUploadClick = () => fileInputRef.current?.click();
 
   const handleCompare = async () => {
     if (!studentSheetFile) {
@@ -302,23 +90,42 @@ const CompareStudentModal = ({
     setError(null);
 
     try {
-      const answerKeyResponse = await fetch(answerKeyUrl);
-      if (!answerKeyResponse.ok)
-        throw new Error("Could not load the answer key image.");
-      const answerKeyBlob = await answerKeyResponse.blob();
-      const answerKeyFile = new File([answerKeyBlob], "answer-key.jpg", {
-        type: answerKeyBlob.type || "image/jpeg",
+      // Fetch the stored answer key image and turn it into a File
+      const res = await fetch(answerKeyUrl);
+      if (!res.ok) throw new Error("Could not load the answer key image.");
+      const blob = await res.blob();
+      const answerKeyFile = new File([blob], "answer-key.jpg", {
+        type: blob.type || "image/jpeg",
       });
 
-      const answerKeyResult = await extractTextFromImage(answerKeyFile);
-      const studentResult = await extractTextFromImage(studentSheetFile);
+      // Let Gemini Vision do all the heavy lifting
+      const geminiResult = await compareAnswersWithGemini(
+        answerKeyFile,
+        studentSheetFile,
+      );
 
-      const comparison = compareAnswers(answerKeyResult, studentResult);
-      setResult(comparison);
-
-      if (onCompareComplete) {
-        onCompareComplete(comparison.score, comparison.details);
+      if (!geminiResult || !geminiResult.details?.length) {
+        throw new Error(
+          "Gemini could not read the answers. Make sure both images are clear and well-lit.",
+        );
       }
+
+      // Normalise the result shape to match what the rest of the UI expects
+      const score = geminiResult.score ?? 0;
+      const details = geminiResult.details.map((d) => ({
+        questionNumber: d.questionNumber,
+        studentAnswer: d.studentAnswer ?? null,
+        correctAnswer: d.correctAnswer,
+        isCorrect: d.isCorrect,
+      }));
+      const correct =
+        geminiResult.correct ?? details.filter((d) => d.isCorrect).length;
+      const total = geminiResult.total ?? details.length;
+      const grade = getGrade(score);
+
+      const comparison = { score, correct, total, details, grade };
+      setResult(comparison);
+      onCompareComplete?.(score, details);
     } catch (err) {
       console.error("Comparison failed:", err);
       setError(err.message || "Failed to compare answers. Please try again.");
@@ -337,18 +144,24 @@ const CompareStudentModal = ({
     onClose();
   };
 
-  // Helper: classify each question for styling
-  const getQuestionStatus = (detail) => {
-    if (detail.isCorrect) return "correct";
-    if (detail.studentAnswer === null || detail.studentAnswer === "?")
-      return "unclear";
+  const resetForAnother = () => {
+    setResult(null);
+    setStudentSheetFile(null);
+    setPreviewUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  // Per-question card helpers
+  const getStatus = (d) => {
+    if (d.isCorrect) return "correct";
+    if (d.studentAnswer === null || d.studentAnswer === "?") return "unclear";
     return "wrong";
   };
 
-  const statusLabel = (detail) => {
-    if (detail.isCorrect) return null;
-    if (detail.studentAnswer === "?") return "not found";
-    if (detail.studentAnswer === null) return "blank";
+  const getUnclearLabel = (d) => {
+    if (d.isCorrect) return null;
+    if (d.studentAnswer === "?") return "not found";
+    if (d.studentAnswer === null) return "blank";
     return null;
   };
 
@@ -357,11 +170,13 @@ const CompareStudentModal = ({
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-center justify-center p-4">
+        {/* Backdrop */}
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm"
           onClick={handleClose}
         />
 
+        {/* Modal */}
         <div className="relative bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
           {/* Header */}
           <div className="sticky top-0 bg-white z-10 border-b border-gray-100 px-6 py-4 flex items-center justify-between">
@@ -383,7 +198,7 @@ const CompareStudentModal = ({
 
           {/* Body */}
           <div className="p-6 space-y-6">
-            {/* Student Info */}
+            {/* Student info banner */}
             <div className="flex items-center gap-4 p-4 bg-gradient-to-r from-emerald-50 to-blue-50 rounded-xl border border-emerald-100">
               <div className="w-12 h-12 bg-emerald-100 rounded-full flex items-center justify-center">
                 <FaUser className="text-emerald-600 text-xl" />
@@ -405,49 +220,52 @@ const CompareStudentModal = ({
             </div>
 
             {!result ?
-              /* ── Upload Section ── */
+              /* ── Upload section ── */
               <div className="space-y-4">
                 <div className="flex items-center gap-2 text-sm text-gray-600">
                   <FaFileImage className="text-emerald-500" />
                   <span>
-                    Upload the student's answer sheet image to compare with the
-                    answer key
+                    Upload the student's answer sheet — Gemini AI will read and
+                    compare it against the answer key automatically.
                   </span>
                 </div>
 
+                {/* Tips */}
                 <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
                   <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
                   <div className="space-y-2 text-sm">
                     <p className="font-semibold text-amber-800">
-                      Important — Before You Upload
+                      Tips for best results
                     </p>
                     <ul className="space-y-1 text-amber-700 text-xs leading-relaxed">
                       <li>
-                        <span className="font-medium">Accepted formats:</span>{" "}
-                        PNG, JPG, and JPEG only.
+                        <span className="font-medium">Format:</span> PNG, JPG,
+                        JPEG only — no PDFs.
                       </li>
                       <li>
-                        <span className="font-medium">Max file size:</span> 10
-                        MB per image.
+                        <span className="font-medium">Max size:</span> 10 MB per
+                        image.
                       </li>
                       <li>
-                        <span className="font-medium">Rate limit:</span> Up to{" "}
-                        <span className="font-medium">
-                          10 sheets per minute
-                        </span>
-                        .
+                        <span className="font-medium">Layout:</span> One
+                        question per line with the number on the left and the
+                        letter on the right (e.g. "1. A").
                       </li>
                       <li>
-                        <span className="font-medium">Image quality:</span> Use
-                        a clear, well-lit, flat photo with letters written large
-                        and dark.
+                        <span className="font-medium">Writing:</span> Large,
+                        dark, clearly formed A / B / C / D letters.
+                      </li>
+                      <li>
+                        <span className="font-medium">Photo:</span> Flat,
+                        well-lit, no skew or blur.
                       </li>
                     </ul>
                   </div>
                 </div>
 
+                {/* Drop zone */}
                 <div
-                  onClick={handleUploadClick}
+                  onClick={() => fileInputRef.current?.click()}
                   className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition group">
                   {previewUrl ?
                     <div className="flex flex-col items-center gap-3">
@@ -480,7 +298,7 @@ const CompareStudentModal = ({
                           Click to select an image
                         </p>
                         <p className="text-xs text-gray-400 mt-1">
-                          PNG, JPG, JPEG up to 10MB
+                          PNG, JPG, JPEG up to 10 MB
                         </p>
                       </div>
                     </div>
@@ -508,17 +326,19 @@ const CompareStudentModal = ({
                   className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white py-3 rounded-xl hover:shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium">
                   {comparing ?
                     <>
-                      <FaSpinner className="animate-spin" /> Comparing...
+                      <FaSpinner className="animate-spin" />
+                      Gemini is reading the answers…
                     </>
                   : <>
-                      <FaEye /> Compare Answers
+                      <FaEye />
+                      Compare Answers
                     </>
                   }
                 </button>
               </div>
-            : /* ── Results Section ── */
+            : /* ── Results section ── */
               <div className="space-y-6">
-                {/* Score Card */}
+                {/* Score card */}
                 <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-6 text-white">
                   <div className="flex items-center justify-between">
                     <div>
@@ -544,99 +364,7 @@ const CompareStudentModal = ({
                   </div>
                 </div>
 
-                {/* Legend */}
-                <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-green-400 inline-block" />
-                    Correct
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-red-400 inline-block" />
-                    Wrong
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
-                    Blank / unreadable
-                  </span>
-                </div>
-
-                {/* Detailed Breakdown */}
-                <div>
-                  <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                    <FaChartPie className="text-emerald-600" />
-                    Question Breakdown
-                  </h4>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                    {result.details.map((detail, index) => {
-                      const status = getQuestionStatus(detail);
-                      const label = statusLabel(detail);
-
-                      const cardClass =
-                        status === "correct" ?
-                          "bg-green-50 border border-green-200"
-                        : status === "unclear" ?
-                          "bg-amber-50 border border-amber-200"
-                        : "bg-red-50 border border-red-200";
-
-                      const answerColor =
-                        status === "correct" ? "text-green-600"
-                        : status === "unclear" ? "text-amber-500"
-                        : "text-red-500";
-
-                      const answerDisplay =
-                        (
-                          detail.studentAnswer === null ||
-                          detail.studentAnswer === "?"
-                        ) ?
-                          "—"
-                        : detail.studentAnswer;
-
-                      return (
-                        <div
-                          key={index}
-                          className={`p-3 rounded-lg text-center ${cardClass}`}>
-                          {/* Question number */}
-                          <p className="text-xs text-gray-400 mb-1">
-                            Q{detail.questionNumber}
-                          </p>
-
-                          {/* Student's answer — large */}
-                          <div
-                            className={`text-xl font-bold flex items-center justify-center gap-1 ${answerColor}`}>
-                            <span>{answerDisplay}</span>
-                            {status === "correct" && (
-                              <FaCheck className="text-green-500 text-xs" />
-                            )}
-                            {status === "wrong" && (
-                              <FaCross className="text-red-500 text-xs" />
-                            )}
-                            {status === "unclear" && (
-                              <FaExclamationTriangle className="text-amber-400 text-xs" />
-                            )}
-                          </div>
-
-                          {/* Correct answer — always visible */}
-                          <p className="text-xs mt-1">
-                            <span className="text-gray-400">Key: </span>
-                            <span className="font-semibold text-gray-600">
-                              {detail.correctAnswer}
-                            </span>
-                          </p>
-
-                          {/* Blank / not found label */}
-                          {label && (
-                            <p className="text-xs text-amber-500 mt-0.5 italic">
-                              {label}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Summary row */}
+                {/* Summary counts */}
                 <div className="grid grid-cols-3 gap-3 text-center">
                   <div className="bg-green-50 border border-green-100 rounded-xl p-3">
                     <p className="text-2xl font-bold text-green-600">
@@ -666,21 +394,105 @@ const CompareStudentModal = ({
                         ).length
                       }
                     </p>
-                    <p className="text-xs text-amber-600 mt-0.5">
-                      Blank / unreadable
-                    </p>
+                    <p className="text-xs text-amber-600 mt-0.5">Unreadable</p>
                   </div>
                 </div>
 
-                {/* Action Buttons */}
+                {/* Legend */}
+                <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full bg-green-400 inline-block" />
+                    Correct
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full bg-red-400 inline-block" />
+                    Wrong
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
+                    Blank / unreadable
+                  </span>
+                </div>
+
+                {/* Question breakdown grid */}
+                <div>
+                  <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                    <FaChartPie className="text-emerald-600" />
+                    Question Breakdown
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {result.details.map((detail, index) => {
+                      const status = getStatus(detail);
+                      const unclearLabel = getUnclearLabel(detail);
+
+                      const cardClass =
+                        status === "correct" ?
+                          "bg-green-50 border border-green-200"
+                        : status === "unclear" ?
+                          "bg-amber-50 border border-amber-200"
+                        : "bg-red-50 border border-red-200";
+
+                      const ansColor =
+                        status === "correct" ? "text-green-600"
+                        : status === "unclear" ? "text-amber-500"
+                        : "text-red-500";
+
+                      const ansDisplay =
+                        (
+                          detail.studentAnswer === null ||
+                          detail.studentAnswer === "?"
+                        ) ?
+                          "—"
+                        : detail.studentAnswer;
+
+                      return (
+                        <div
+                          key={index}
+                          className={`p-3 rounded-lg text-center ${cardClass}`}>
+                          {/* Question number */}
+                          <p className="text-xs text-gray-400 mb-1">
+                            Q{detail.questionNumber}
+                          </p>
+
+                          {/* Student answer — large */}
+                          <div
+                            className={`text-xl font-bold flex items-center justify-center gap-1 ${ansColor}`}>
+                            <span>{ansDisplay}</span>
+                            {status === "correct" && (
+                              <FaCheck className="text-green-500 text-xs" />
+                            )}
+                            {status === "wrong" && (
+                              <FaCross className="text-red-500 text-xs" />
+                            )}
+                            {status === "unclear" && (
+                              <FaExclamationTriangle className="text-amber-400 text-xs" />
+                            )}
+                          </div>
+
+                          {/* Correct answer — always visible */}
+                          <p className="text-xs mt-1">
+                            <span className="text-gray-400">Key: </span>
+                            <span className="font-semibold text-gray-600">
+                              {detail.correctAnswer}
+                            </span>
+                          </p>
+
+                          {/* Blank / not found label */}
+                          {unclearLabel && (
+                            <p className="text-xs text-amber-500 mt-0.5 italic">
+                              {unclearLabel}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Action buttons */}
                 <div className="flex gap-3">
                   <button
-                    onClick={() => {
-                      setResult(null);
-                      setStudentSheetFile(null);
-                      setPreviewUrl(null);
-                      if (fileInputRef.current) fileInputRef.current.value = "";
-                    }}
+                    onClick={resetForAnother}
                     className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition">
                     Compare Another
                   </button>
