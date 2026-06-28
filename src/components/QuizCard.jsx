@@ -26,9 +26,9 @@ const QuizCard = ({
       case "active":
         return "bg-emerald-100 text-emerald-700";
       case "upcoming":
-        return "bg-noon-warm/20 text-noon-warm";
+        return "bg-amber-100 text-amber-700";
       case "completed":
-        return "bg-ocean-blue/20 text-ocean-blue";
+        return "bg-blue-100 text-blue-700";
       default:
         return "bg-gray-100 text-gray-600";
     }

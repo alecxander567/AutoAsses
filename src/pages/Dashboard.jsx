@@ -1,11 +1,10 @@
-// src/pages/Dashboard.jsx - Updated imports section
-import { useState, useRef } from "react";
+// src/pages/Dashboard.jsx
+import { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FaUser,
   FaSignOutAlt,
   FaSpinner,
-  FaUpload,
   FaFileAlt,
   FaCheckCircle,
   FaClipboardCheck,
@@ -15,14 +14,12 @@ import {
   FaCloudUploadAlt,
   FaRobot,
   FaUsers,
-  FaDownload,
   FaEye,
   FaFilter,
   FaBell,
   FaCog,
   FaHome,
   FaBook,
-  FaCalendarAlt,
   FaChartLine,
   FaRocket,
   FaChalkboardTeacher,
@@ -36,6 +33,7 @@ import {
   FaChartPie,
   FaStar,
   FaExchangeAlt,
+  FaLightbulb,
 } from "react-icons/fa";
 import { useAuthActions } from "../hooks/useAuthActions";
 import { useClasses } from "../hooks/useClasses";
@@ -50,6 +48,7 @@ import QuizCard from "../components/QuizCard";
 import AddQuizModal from "../components/AddQuizModal";
 import LoadingSpinner from "../components/LoadingSpinner";
 import CompareStudentModal from "../components/CompareStudentModal";
+import { analyzeQuizResults } from "../services/googleAIService";
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -102,6 +101,10 @@ const Dashboard = () => {
   const [selectedQuizForCompare, setSelectedQuizForCompare] = useState(null);
   const [updatingStudentScore, setUpdatingStudentScore] = useState(false);
 
+  // State for AI analysis
+  const [quizAnalysis, setQuizAnalysis] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+
   // Use the upload hook
   const {
     answerKeyUrl,
@@ -114,6 +117,212 @@ const Dashboard = () => {
   } = useUploadAnswerKey();
 
   const fileInputRef = useRef(null);
+
+  // ✅ Calculate stats at component level
+  const totalQuizzes = classes.reduce(
+    (acc, cls) => acc + (cls.quizzes?.length || 0),
+    0,
+  );
+  const totalStudents = classes.reduce(
+    (acc, cls) => acc + (cls.students?.length || 0),
+    0,
+  );
+
+  // Calculate average score
+  let totalScore = 0;
+  let studentsWithScores = 0;
+  classes.forEach((cls) => {
+    cls.students?.forEach((student) => {
+      if (student.avgScore) {
+        totalScore += student.avgScore;
+        studentsWithScores++;
+      }
+    });
+  });
+  const avgScore = studentsWithScores > 0 ? totalScore / studentsWithScores : 0;
+
+  // Calculate pass/fail rates
+  let passed = 0;
+  let failed = 0;
+  classes.forEach((cls) => {
+    cls.students?.forEach((student) => {
+      if (
+        student.avgScore !== undefined &&
+        student.avgScore !== null &&
+        student.avgScore !== 0
+      ) {
+        if (student.avgScore >= 70) {
+          passed++;
+        } else {
+          failed++;
+        }
+      }
+    });
+  });
+  const totalGraded = passed + failed;
+  const passRate =
+    totalGraded > 0 ? Math.round((passed / totalGraded) * 100) : 0;
+
+  // Calculate pending checks
+  const pendingChecks = classes.reduce((acc, cls) => {
+    return (
+      acc +
+      (cls.students?.filter(
+        (s) =>
+          s.avgScore === undefined || s.avgScore === null || s.avgScore === 0,
+      ).length || 0)
+    );
+  }, 0);
+
+  // Calculate completed checks (students with scores)
+  const completedChecks = totalGraded;
+
+  // Calculate accuracy rate
+  const accuracyRate =
+    studentsWithScores > 0 ? Math.round(totalScore / studentsWithScores) : 0;
+
+  // ─── FIX 1: loadQuizAnalysis accepts quizId and bails if quiz changed ───────
+  const loadQuizAnalysis = async (quiz, students) => {
+    const quizId = quiz.id; // capture at call time
+
+    if (!quiz || !students || students.length === 0) {
+      setQuizAnalysis(null);
+      setAnalysisLoading(false);
+      return;
+    }
+
+    const hasGradedStudents = students.some((s) => s.quizScores?.[quiz.id]);
+    if (!hasGradedStudents) {
+      setQuizAnalysis(null);
+      setAnalysisLoading(false);
+      return;
+    }
+
+    setAnalysisLoading(true);
+    try {
+      const quizData = {
+        quizTitle: quiz.title,
+        totalStudents: students.length,
+        studentScores: students.map((s) => ({
+          name: s.name,
+          score: s.quizScores?.[quiz.id]?.score || 0,
+          details: s.quizScores?.[quiz.id]?.details || [],
+        })),
+        questions: quiz.totalQuestions || 10,
+        questionDetails: students
+          .filter((s) => s.quizScores?.[quiz.id]?.details)
+          .flatMap((s) => s.quizScores[quiz.id].details || []),
+      };
+
+      const result = await analyzeQuizResults(quizData);
+
+      // ✅ Don't update state if the user navigated to a different quiz
+      if (selectedQuiz?.id !== quizId) return;
+
+      if (result) {
+        setQuizAnalysis(result);
+      } else {
+        setQuizAnalysis(generateFallbackAnalysis(students, quiz));
+      }
+    } catch (error) {
+      // ✅ Same guard on the error path
+      if (selectedQuiz?.id !== quizId) return;
+      console.error("Analysis error:", error);
+      setQuizAnalysis(generateFallbackAnalysis(students, quiz));
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
+  // Fallback analysis function
+  const generateFallbackAnalysis = (students, quiz) => {
+    const scores = students
+      .filter((s) => s.quizScores?.[quiz.id]?.score !== undefined)
+      .map((s) => s.quizScores[quiz.id].score);
+
+    if (scores.length === 0) return null;
+
+    const avgScore = Math.round(
+      scores.reduce((a, b) => a + b, 0) / scores.length,
+    );
+    const passCount = scores.filter((s) => s >= 70).length;
+    const failCount = scores.filter((s) => s < 70).length;
+
+    const gradeDist = {
+      A: scores.filter((s) => s >= 90).length,
+      B: scores.filter((s) => s >= 80 && s < 90).length,
+      C: scores.filter((s) => s >= 70 && s < 80).length,
+      D: scores.filter((s) => s >= 60 && s < 70).length,
+      F: scores.filter((s) => s < 60).length,
+    };
+
+    const questionStats = {};
+    students.forEach((s) => {
+      const details = s.quizScores?.[quiz.id]?.details || [];
+      details.forEach((d) => {
+        if (!questionStats[d.questionNumber]) {
+          questionStats[d.questionNumber] = { correct: 0, total: 0 };
+        }
+        questionStats[d.questionNumber].total++;
+        if (d.isCorrect) questionStats[d.questionNumber].correct++;
+      });
+    });
+
+    const difficultQuestions = Object.entries(questionStats)
+      .map(([q, stats]) => ({
+        questionNumber: parseInt(q),
+        percentCorrect: Math.round((stats.correct / stats.total) * 100),
+        total: stats.total,
+      }))
+      .sort((a, b) => a.percentCorrect - b.percentCorrect)
+      .slice(0, 3);
+
+    return {
+      summary: `Class average is ${avgScore}% with ${passCount} students passing and ${failCount} students failing.`,
+      totalStudents: scores.length,
+      averageScore: avgScore,
+      passRate: Math.round((passCount / scores.length) * 100),
+      failRate: Math.round((failCount / scores.length) * 100),
+      gradeDistribution: gradeDist,
+      mostDifficultQuestions: difficultQuestions.map((q) => ({
+        questionNumber: q.questionNumber,
+        percentCorrect: q.percentCorrect,
+        insight: `Only ${q.percentCorrect}% of students got this question correct.`,
+        correctAnswer: "N/A",
+        studentAnswers: {},
+        commonWrongAnswer: "N/A",
+      })),
+      recommendations: [
+        `Review the most difficult questions with the class.`,
+        `Consider providing additional practice materials.`,
+        `Focus on topics where students struggled the most.`,
+      ],
+      insights: [
+        `${passCount} out of ${scores.length} students passed this quiz.`,
+        `The average score was ${avgScore}%.`,
+        `${gradeDist.A} students got an A, ${gradeDist.F} students got an F.`,
+      ],
+    };
+  };
+
+  // ─── FIX 2: useEffect captures quizId and guards against stale closures ──────
+  useEffect(() => {
+    if (selectedQuiz && activeTab === "quiz-details") {
+      const quizId = selectedQuiz.id; // capture current quiz id
+      const classData = getClassById(selectedQuiz.classId);
+      const students = classData?.students || [];
+
+      if (students.length > 0) {
+        const timer = setTimeout(() => {
+          // ✅ Only proceed if the user is still viewing the same quiz
+          if (selectedQuiz?.id === quizId) {
+            loadQuizAnalysis(selectedQuiz, students);
+          }
+        }, 0);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [selectedQuiz, activeTab, getClassById]);
 
   const handleLogoutClick = async () => {
     setIsLoggingOut(true);
@@ -171,20 +380,30 @@ const Dashboard = () => {
     setSelectedClassId(null);
   };
 
+  // ─── FIX 3: handleViewQuiz clears ALL stale state synchronously first ────────
   const handleViewQuiz = (quiz) => {
+    // Clear stale state BEFORE setting the new quiz so the render never
+    // briefly shows the previous quiz's analysis or answer key image.
+    setQuizAnalysis(null);
+    setAnalysisLoading(false);
+    resetUpload(); // always wipe the previous image first
+
     setSelectedQuiz(quiz);
     setSelectedClassId(quiz.classId);
-    // Load stored answer key URL if it exists
+
+    // Now load the correct answer key for this quiz (if it has one)
     if (quiz.answerKeyUrl) {
       setAnswerKeyUrl(quiz.answerKeyUrl);
-    } else {
-      resetUpload();
     }
+
     setActiveTab("quiz-details");
   };
 
   const handleBackToQuizzes = () => {
     setSelectedQuiz(null);
+    setQuizAnalysis(null);
+    setAnalysisLoading(false);
+    resetUpload();
     setActiveTab("quizzes");
   };
 
@@ -293,7 +512,6 @@ const Dashboard = () => {
     setIsDeletingImage(true);
     try {
       await deleteAnswerKey();
-      // Also remove the answerKeyUrl from the quiz in Firestore
       if (selectedClassId && selectedQuiz) {
         await updateQuiz(selectedClassId, selectedQuiz.id, {
           answerKeyUrl: null,
@@ -335,6 +553,11 @@ const Dashboard = () => {
             "success",
             `Score of ${score}% recorded for ${selectedStudent?.name}`,
           );
+          if (selectedQuiz) {
+            const classData = getClassById(selectedQuiz.classId);
+            const students = classData?.students || [];
+            loadQuizAnalysis(selectedQuiz, students);
+          }
         } else {
           showAlert("error", "Failed to update student score");
         }
@@ -347,155 +570,11 @@ const Dashboard = () => {
     }
   };
 
-  // Handle compare student
   const handleCompareStudent = (student, quiz) => {
     setSelectedStudent(student);
     setSelectedQuizForCompare(quiz);
     setCompareModalOpen(true);
   };
-
-  // Calculate real stats from classes
-  const totalQuizzes = classes.reduce(
-    (acc, cls) => acc + (cls.quizzes?.length || 0),
-    0,
-  );
-  const totalStudents = classes.reduce(
-    (acc, cls) => acc + (cls.students?.length || 0),
-    0,
-  );
-
-  // Calculate average score
-  let totalScore = 0;
-  let studentsWithScores = 0;
-  classes.forEach((cls) => {
-    cls.students?.forEach((student) => {
-      if (student.avgScore) {
-        totalScore += student.avgScore;
-        studentsWithScores++;
-      }
-    });
-  });
-  const avgScore = studentsWithScores > 0 ? totalScore / studentsWithScores : 0;
-
-  // Mock Data for overview (keep as fallback)
-  const stats = {
-    totalQuizzes: totalQuizzes || 0,
-    pendingChecks: 7,
-    completedChecks: 156,
-    accuracyRate: 94.5,
-    totalStudents: totalStudents || 0,
-    averageScore: avgScore || 0,
-  };
-
-  const recentActivities = [
-    {
-      id: 1,
-      type: "upload",
-      title: "Math Quiz #3 - Answer Key",
-      time: "2 hours ago",
-      status: "completed",
-      quiz: "Algebra Basics",
-    },
-    {
-      id: 2,
-      type: "check",
-      title: "Science Exam - Period 2",
-      time: "4 hours ago",
-      status: "pending",
-      quiz: "Biology Chapter 5",
-    },
-    {
-      id: 3,
-      type: "upload",
-      title: "History Test - Answer Sheets",
-      time: "1 day ago",
-      status: "completed",
-      quiz: "World War II",
-    },
-    {
-      id: 4,
-      type: "check",
-      title: "English Quiz - Period 1",
-      time: "2 days ago",
-      status: "completed",
-      quiz: "Grammar & Composition",
-    },
-    {
-      id: 5,
-      type: "upload",
-      title: "Physics Quiz #2",
-      time: "3 days ago",
-      status: "pending",
-      quiz: "Mechanics",
-    },
-  ];
-
-  const upcomingQuizzes = [
-    {
-      id: 1,
-      title: "Chemistry Final",
-      date: "2024-12-15",
-      students: 32,
-      status: "upcoming",
-    },
-    {
-      id: 2,
-      title: "Math Quiz #4",
-      date: "2024-12-18",
-      students: 28,
-      status: "upcoming",
-    },
-    {
-      id: 3,
-      title: "History Essay",
-      date: "2024-12-20",
-      students: 30,
-      status: "upcoming",
-    },
-  ];
-
-  const recentQuizResults = [
-    {
-      id: 1,
-      title: "Biology Chapter 5",
-      date: "2024-12-10",
-      students: 25,
-      average: 78.5,
-      passRate: 72,
-    },
-    {
-      id: 2,
-      title: "Algebra Basics",
-      date: "2024-12-08",
-      students: 30,
-      average: 84.2,
-      passRate: 83,
-    },
-    {
-      id: 3,
-      title: "World War II",
-      date: "2024-12-05",
-      students: 28,
-      average: 91.0,
-      passRate: 89,
-    },
-  ];
-
-  if (authLoading || classesLoading) {
-    return <LoadingSpinner />;
-  }
-
-  // Show logout spinner
-  if (isLoggingOut) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-seashell-cream">
-        <div className="text-center">
-          <FaSpinner className="animate-spin text-4xl text-emerald-600 mx-auto mb-4" />
-          <p className="text-emerald-700/70">Logging out...</p>
-        </div>
-      </div>
-    );
-  }
 
   // Tab content renderer
   const renderContent = () => {
@@ -517,6 +596,176 @@ const Dashboard = () => {
     }
   };
 
+  // Render analysis section
+  const renderAnalysisSection = (quiz, students) => {
+    if (analysisLoading) {
+      return (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl p-6 text-center">
+          <FaSpinner className="animate-spin text-3xl text-purple-600 mx-auto mb-3" />
+          <p className="text-gray-600">AI is analyzing quiz results...</p>
+        </div>
+      );
+    }
+
+    const hasGradedStudents = students.some((s) => s.quizScores?.[quiz.id]);
+
+    if (!hasGradedStudents) {
+      return (
+        <div className="bg-gray-50 rounded-xl p-6 text-center">
+          <p className="text-gray-500">No students have been graded yet</p>
+          <p className="text-xs text-gray-400 mt-1">
+            Use the Compare button to grade students
+          </p>
+        </div>
+      );
+    }
+
+    if (!quizAnalysis) {
+      return (
+        <div className="bg-gray-50 rounded-xl p-6 text-center">
+          <p className="text-gray-500">No analysis available</p>
+        </div>
+      );
+    }
+
+    const analysis = quizAnalysis;
+
+    return (
+      <div className="space-y-4">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 rounded-xl p-3 text-center">
+            <p className="text-xs text-emerald-600 font-medium">AVG SCORE</p>
+            <p className="text-2xl font-bold text-emerald-700">
+              {analysis.averageScore || 0}%
+            </p>
+          </div>
+          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-3 text-center">
+            <p className="text-xs text-blue-600 font-medium">PASS RATE</p>
+            <p className="text-2xl font-bold text-blue-700">
+              {analysis.passRate || 0}%
+            </p>
+          </div>
+          <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-xl p-3 text-center">
+            <p className="text-xs text-amber-600 font-medium">FAIL RATE</p>
+            <p className="text-2xl font-bold text-amber-700">
+              {analysis.failRate || 0}%
+            </p>
+          </div>
+          <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-3 text-center">
+            <p className="text-xs text-purple-600 font-medium">STUDENTS</p>
+            <p className="text-2xl font-bold text-purple-700">
+              {analysis.totalStudents || 0}
+            </p>
+          </div>
+        </div>
+
+        {/* Grade Distribution */}
+        {analysis.gradeDistribution && (
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-2">
+              Grade Distribution
+            </h4>
+            <div className="grid grid-cols-5 gap-2">
+              {Object.entries(analysis.gradeDistribution).map(
+                ([grade, count]) => (
+                  <div key={grade} className="text-center">
+                    <div
+                      className={`rounded-lg p-2 ${
+                        grade === "A" ? "bg-green-100"
+                        : grade === "B" ? "bg-blue-100"
+                        : grade === "C" ? "bg-yellow-100"
+                        : grade === "D" ? "bg-orange-100"
+                        : "bg-red-100"
+                      }`}>
+                      <p className="text-lg font-bold">{count}</p>
+                      <p className="text-xs text-gray-600">Grade {grade}</p>
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Most Difficult Questions */}
+        {analysis.mostDifficultQuestions &&
+          analysis.mostDifficultQuestions.length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                <FaExclamationTriangle className="text-red-500" />
+                Most Difficult Questions
+              </h4>
+              <div className="space-y-2">
+                {analysis.mostDifficultQuestions.slice(0, 3).map((q, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-gray-800">
+                        Question {q.questionNumber}
+                      </span>
+                      <span className="text-sm font-semibold text-red-600">
+                        {q.percentCorrect}% correct
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">{q.insight}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+        {/* Summary */}
+        {analysis.summary && (
+          <div className="p-3 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
+            <p className="text-sm text-gray-700">{analysis.summary}</p>
+          </div>
+        )}
+
+        {/* Recommendations */}
+        {analysis.recommendations && analysis.recommendations.length > 0 && (
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <FaLightbulb className="text-amber-500" />
+              Recommendations
+            </h4>
+            <ul className="space-y-1">
+              {analysis.recommendations.map((rec, idx) => (
+                <li
+                  key={idx}
+                  className="text-sm text-gray-600 flex items-start gap-2">
+                  <span className="text-amber-500">•</span>
+                  {rec}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Insights */}
+        {analysis.insights && analysis.insights.length > 0 && (
+          <div>
+            <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+              <FaCheckCircle className="text-emerald-500" />
+              Key Insights
+            </h4>
+            <ul className="space-y-1">
+              {analysis.insights.map((insight, idx) => (
+                <li
+                  key={idx}
+                  className="text-sm text-gray-600 flex items-start gap-2">
+                  <span className="text-emerald-500">•</span>
+                  {insight}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Quiz Details View
   const renderQuizDetails = () => {
     const quiz = selectedQuiz;
@@ -529,7 +778,6 @@ const Dashboard = () => {
 
       try {
         const url = await uploadAnswerKey(file);
-        // Save the answer key URL to the quiz in Firestore
         if (url && selectedClassId && selectedQuiz) {
           await updateQuiz(selectedClassId, selectedQuiz.id, {
             answerKeyUrl: url,
@@ -544,7 +792,6 @@ const Dashboard = () => {
         );
       }
 
-      // Reset file input
       event.target.value = null;
     };
 
@@ -570,8 +817,9 @@ const Dashboard = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left Panel - Students List */}
+          {/* Left Panel - Students List + Analysis */}
           <div className="space-y-6">
+            {/* Students List */}
             <div className="bg-gray-50 rounded-xl p-4">
               <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
                 <FaUsers className="text-ocean-blue" />
@@ -604,11 +852,6 @@ const Dashboard = () => {
                       <div className="flex items-center gap-3">
                         <div className="text-right">
                           {(() => {
-                            // Show THIS quiz's score, not the student's
-                            // cross-quiz average -- avgScore mixes in
-                            // results from other quizzes, which doesn't
-                            // make sense while looking at one quiz's
-                            // details specifically.
                             const quizResult = student.quizScores?.[quiz.id];
                             if (!quizResult) {
                               return (
@@ -648,6 +891,20 @@ const Dashboard = () => {
                   ))}
                 </div>
               }
+            </div>
+
+            {/* AI Analysis Section */}
+            <div className="bg-white rounded-xl border border-purple-100 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <FaRobot className="text-purple-600" />
+                <h3 className="font-bold text-gray-800">AI Quiz Analysis</h3>
+                {quizAnalysis && !analysisLoading && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full ml-auto">
+                    AI Generated
+                  </span>
+                )}
+              </div>
+              {renderAnalysisSection(quiz, students)}
             </div>
           </div>
 
@@ -759,266 +1016,328 @@ const Dashboard = () => {
   };
 
   // Overview Tab
-  const renderOverview = () => (
-    <>
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-6 sm:mb-8">
-        <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
-          <p className="text-xs sm:text-sm text-gray-500">Total Quizzes</p>
-          <p className="text-xl sm:text-2xl font-bold text-emerald-900">
-            {stats.totalQuizzes}
-          </p>
-          <p className="text-xs text-emerald-600">↑ 12% this month</p>
-        </div>
-        <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-noon-warm/30">
-          <p className="text-xs sm:text-sm text-gray-500">Pending Checks</p>
-          <p className="text-xl sm:text-2xl font-bold text-noon-warm">
-            {stats.pendingChecks}
-          </p>
-          <p className="text-xs text-noon-warm">
-            <FaClock className="inline mr-1" />
-            Waiting for review
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
-          <p className="text-xs sm:text-sm text-gray-500">Completed</p>
-          <p className="text-xl sm:text-2xl font-bold text-emerald-600">
-            {stats.completedChecks}
-          </p>
-          <p className="text-xs text-emerald-600">
-            <FaCheck className="inline mr-1" />
-            All checked
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-ocean-blue/30">
-          <p className="text-xs sm:text-sm text-gray-500">Accuracy Rate</p>
-          <p className="text-xl sm:text-2xl font-bold text-ocean-blue">
-            {stats.accuracyRate}%
-          </p>
-          <p className="text-xs text-ocean-blue">
-            <FaChartLine className="inline mr-1" />
-            Up 2.5%
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-purple-200">
-          <p className="text-xs sm:text-sm text-gray-500">Students</p>
-          <p className="text-xl sm:text-2xl font-bold text-purple-600">
-            {stats.totalStudents}
-          </p>
-          <p className="text-xs text-purple-600">
-            <FaGraduationCap className="inline mr-1" />
-            Active
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-pink-200">
-          <p className="text-xs sm:text-sm text-gray-500">Avg. Score</p>
-          <p className="text-xl sm:text-2xl font-bold text-pink-600">
-            {stats.averageScore.toFixed(1)}%
-          </p>
-          <p className="text-xs text-pink-600">
-            <FaChartPie className="inline mr-1" />
-            Class average
-          </p>
-        </div>
-      </div>
+  const renderOverview = () => {
+    const recentQuizResultsDisplay = [];
+    classes.forEach((cls) => {
+      (cls.quizzes || []).forEach((quiz) => {
+        const gradedStudents =
+          cls.students?.filter((s) => s.quizScores?.[quiz.id]) || [];
+        if (gradedStudents.length > 0) {
+          const scores = gradedStudents.map((s) => s.quizScores[quiz.id].score);
+          const avg = Math.round(
+            scores.reduce((a, b) => a + b, 0) / scores.length,
+          );
+          const passCount = scores.filter((s) => s >= 70).length;
+          recentQuizResultsDisplay.push({
+            id: quiz.id,
+            title: quiz.title,
+            date: quiz.date || quiz.createdAt?.split("T")[0] || "N/A",
+            students: gradedStudents.length,
+            average: avg,
+            passRate: Math.round((passCount / scores.length) * 100),
+          });
+        }
+      });
+    });
+    recentQuizResultsDisplay.sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      return dateB - dateA;
+    });
+    const recentQuizResultsFiltered = recentQuizResultsDisplay.slice(0, 5);
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-        {/* Quick Actions */}
-        <div className="lg:col-span-1 space-y-4">
-          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-            <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <FaRocket className="text-emerald-600" />
-              Quick Actions
-            </h3>
-            <div className="space-y-3">
-              <button className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
-                <FaCloudUploadAlt />
-                <span className="text-sm font-medium">Upload Answer Key</span>
-              </button>
-              <button className="w-full bg-gradient-to-r from-noon-warm to-noon-sun text-gray-800 p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
-                <FaFileAlt />
-                <span className="text-sm font-medium">
-                  Upload Answer Sheets
-                </span>
-              </button>
-              <button className="w-full bg-gradient-to-r from-ocean-blue to-blue-400 text-white p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
-                <FaRobot />
-                <span className="text-sm font-medium">AI Summary</span>
-              </button>
-            </div>
+    return (
+      <>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-6 sm:mb-8">
+          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
+            <p className="text-xs sm:text-sm text-gray-500">Total Quizzes</p>
+            <p className="text-xl sm:text-2xl font-bold text-emerald-900">
+              {totalQuizzes}
+            </p>
+            <p className="text-xs text-emerald-600">{classes.length} classes</p>
           </div>
-
-          {/* Upcoming Quizzes */}
-          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-            <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-              <FaCalendarAlt className="text-noon-warm" />
-              Upcoming Quizzes
-            </h3>
-            <div className="space-y-3">
-              {upcomingQuizzes.map((quiz) => (
-                <div
-                  key={quiz.id}
-                  className="flex items-center justify-between p-2 bg-gray-50 rounded-lg">
-                  <div>
-                    <p className="text-sm font-medium text-gray-700">
-                      {quiz.title}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {quiz.date} • {quiz.students} students
-                    </p>
-                  </div>
-                  <span className="px-2 py-1 bg-noon-warm/20 text-noon-warm text-xs rounded-full">
-                    Upcoming
-                  </span>
-                </div>
-              ))}
-            </div>
+          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-noon-warm/30">
+            <p className="text-xs sm:text-sm text-gray-500">Pending Checks</p>
+            <p className="text-xl sm:text-2xl font-bold text-noon-warm">
+              {pendingChecks}
+            </p>
+            <p className="text-xs text-noon-warm">
+              <FaClock className="inline mr-1" />
+              Needs grading
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-emerald-100/50">
+            <p className="text-xs sm:text-sm text-gray-500">Completed</p>
+            <p className="text-xl sm:text-2xl font-bold text-emerald-600">
+              {completedChecks}
+            </p>
+            <p className="text-xs text-emerald-600">
+              <FaCheck className="inline mr-1" />
+              Graded
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-ocean-blue/30">
+            <p className="text-xs sm:text-sm text-gray-500">Accuracy Rate</p>
+            <p className="text-xl sm:text-2xl font-bold text-ocean-blue">
+              {accuracyRate}%
+            </p>
+            <p className="text-xs text-ocean-blue">
+              <FaChartLine className="inline mr-1" />
+              Overall average
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-purple-200">
+            <p className="text-xs sm:text-sm text-gray-500">Students</p>
+            <p className="text-xl sm:text-2xl font-bold text-purple-600">
+              {totalStudents}
+            </p>
+            <p className="text-xs text-purple-600">
+              <FaGraduationCap className="inline mr-1" />
+              {totalGraded} graded
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-3 sm:p-4 shadow-sm border border-pink-200">
+            <p className="text-xs sm:text-sm text-gray-500">Pass Rate</p>
+            <p className="text-xl sm:text-2xl font-bold text-pink-600">
+              {passRate}%
+            </p>
+            <p className="text-xs text-pink-600">
+              <FaChartPie className="inline mr-1" />
+              {passed} passed / {failed} failed
+            </p>
           </div>
         </div>
 
-        {/* Recent Activity */}
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-            <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
-              <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                <FaHistory className="text-emerald-600" />
-                Recent Activity
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+          {/* Quick Actions */}
+          <div className="lg:col-span-1 space-y-4">
+            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
+              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <FaRocket className="text-emerald-600" />
+                Quick Actions
               </h3>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Search activities..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="px-3 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
-                />
-                <button className="p-1.5 text-gray-500 hover:text-gray-700 bg-gray-100 rounded-lg">
-                  <FaFilter />
+              <div className="space-y-3">
+                <button
+                  onClick={() => setActiveTab("quizzes")}
+                  className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
+                  <FaBook />
+                  <span className="text-sm font-medium">View All Quizzes</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab("students")}
+                  className="w-full bg-blue-500 hover:bg-blue-600 text-white p-3 rounded-xl transition-all flex items-center gap-3">
+                  <FaUsers />
+                  <span className="text-sm font-medium">Manage Students</span>
+                </button>
+                <button
+                  onClick={() => setShowAddClassModal(true)}
+                  className="w-full bg-gradient-to-r from-purple-600 to-purple-500 text-white p-3 rounded-xl hover:shadow-lg transition-all flex items-center gap-3">
+                  <FaPlus />
+                  <span className="text-sm font-medium">Create New Class</span>
                 </button>
               </div>
             </div>
-            <div className="divide-y divide-gray-100">
-              {recentActivities.map((activity) => (
-                <div
-                  key={activity.id}
-                  className="px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center justify-between hover:bg-gray-50 transition gap-2">
-                  <div className="flex items-center gap-3">
-                    {activity.type === "upload" ?
-                      <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center">
-                        <FaUpload className="text-emerald-600 text-sm" />
-                      </div>
-                    : <div className="w-8 h-8 bg-noon-warm/20 rounded-lg flex items-center justify-center">
-                        <FaCheckCircle className="text-noon-warm text-sm" />
-                      </div>
-                    }
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">
-                        {activity.title}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {activity.quiz} • {activity.time}
-                      </p>
-                    </div>
-                  </div>
-                  <span
-                    className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      activity.status === "completed" ?
-                        "bg-emerald-100 text-emerald-700"
-                      : "bg-noon-warm/20 text-noon-warm"
-                    }`}>
-                    {activity.status === "completed" ? "Completed" : "Pending"}
+
+            {/* Quick Stats */}
+            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
+              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <FaChartBar className="text-noon-warm" />
+                Quick Stats
+              </h3>
+              <div className="space-y-3">
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                  <span className="text-sm text-gray-600">Total Classes</span>
+                  <span className="text-sm font-bold text-emerald-600">
+                    {classes.length}
                   </span>
                 </div>
-              ))}
-            </div>
-            <div className="px-4 sm:px-6 py-3 bg-gray-50 border-t border-gray-100">
-              <button className="text-sm text-emerald-600 hover:text-emerald-800 font-medium">
-                View All Activity →
-              </button>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                  <span className="text-sm text-gray-600">Total Students</span>
+                  <span className="text-sm font-bold text-purple-600">
+                    {totalStudents}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                  <span className="text-sm text-gray-600">Total Quizzes</span>
+                  <span className="text-sm font-bold text-blue-600">
+                    {totalQuizzes}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                  <span className="text-sm text-gray-600">Average Score</span>
+                  <span className="text-sm font-bold text-emerald-600">
+                    {avgScore.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Recent Results */}
-      <div className="mt-6 sm:mt-8">
-        <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
-          <div className="px-4 sm:px-6 py-4 border-b border-gray-100">
-            <h3 className="font-bold text-gray-800 flex items-center gap-2">
-              <FaChartBar className="text-ocean-blue" />
-              Recent Quiz Results
-            </h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Quiz Title
-                  </th>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Date
-                  </th>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Students
-                  </th>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Average
-                  </th>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Pass Rate
-                  </th>
-                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {recentQuizResults.map((result) => (
-                  <tr key={result.id} className="hover:bg-gray-50 transition">
-                    <td className="px-4 sm:px-6 py-3 text-sm font-medium text-gray-700">
-                      {result.title}
-                    </td>
-                    <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
-                      {result.date}
-                    </td>
-                    <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
-                      {result.students}
-                    </td>
-                    <td className="px-4 sm:px-6 py-3 text-sm font-medium text-ocean-blue">
-                      {result.average}%
-                    </td>
-                    <td className="px-4 sm:px-6 py-3 text-sm">
-                      <span
-                        className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          result.passRate >= 80 ?
-                            "bg-emerald-100 text-emerald-700"
-                          : result.passRate >= 60 ?
-                            "bg-noon-warm/20 text-noon-warm"
-                          : "bg-red-100 text-red-700"
-                        }`}>
-                        {result.passRate}%
-                      </span>
-                    </td>
-                    <td className="px-4 sm:px-6 py-3">
-                      <div className="flex items-center gap-2">
-                        <button className="p-1 text-gray-400 hover:text-emerald-600 transition">
-                          <FaEye className="text-sm" />
-                        </button>
-                        <button className="p-1 text-gray-400 hover:text-emerald-600 transition">
-                          <FaDownload className="text-sm" />
-                        </button>
+          {/* Recent Activity */}
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-100 flex flex-wrap justify-between items-center gap-2">
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <FaHistory className="text-emerald-600" />
+                  Recent Activity
+                </h3>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Search activities..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="px-3 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  />
+                  <button className="p-1.5 text-gray-500 hover:text-gray-700 bg-gray-100 rounded-lg">
+                    <FaFilter />
+                  </button>
+                </div>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {recentQuizResultsFiltered.length > 0 ?
+                  recentQuizResultsFiltered.map((result) => (
+                    <div
+                      key={result.id}
+                      className="px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center justify-between hover:bg-gray-50 transition gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center">
+                          <FaFileAlt className="text-emerald-600 text-sm" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-gray-700">
+                            {result.title}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {result.students} students • {result.date}
+                          </p>
+                        </div>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-medium text-emerald-600">
+                          {result.average}%
+                        </span>
+                        <span
+                          className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            result.passRate >= 80 ?
+                              "bg-emerald-100 text-emerald-700"
+                            : result.passRate >= 60 ?
+                              "bg-noon-warm/20 text-noon-warm"
+                            : "bg-red-100 text-red-700"
+                          }`}>
+                          {result.passRate}% pass
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                : <div className="px-4 sm:px-6 py-8 text-center text-gray-500">
+                    <p>
+                      No quiz results yet. Start grading students to see
+                      activity!
+                    </p>
+                  </div>
+                }
+              </div>
+              {recentQuizResultsFiltered.length > 0 && (
+                <div className="px-4 sm:px-6 py-3 bg-gray-50 border-t border-gray-100">
+                  <button
+                    onClick={() => setActiveTab("quizzes")}
+                    className="text-sm text-emerald-600 hover:text-emerald-800 font-medium">
+                    View All Quizzes →
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
-    </>
-  );
+
+        {/* Recent Results Table */}
+        {recentQuizResultsFiltered.length > 0 && (
+          <div className="mt-6 sm:mt-8">
+            <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 overflow-hidden">
+              <div className="px-4 sm:px-6 py-4 border-b border-gray-100">
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <FaChartBar className="text-ocean-blue" />
+                  Quiz Results Overview
+                </h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Quiz Title
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Date
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Students
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Average
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Pass Rate
+                      </th>
+                      <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {recentQuizResultsFiltered.map((result) => (
+                      <tr
+                        key={result.id}
+                        className="hover:bg-gray-50 transition">
+                        <td className="px-4 sm:px-6 py-3 text-sm font-medium text-gray-700">
+                          {result.title}
+                        </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
+                          {result.date}
+                        </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm text-gray-500">
+                          {result.students}
+                        </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm font-medium text-ocean-blue">
+                          {result.average}%
+                        </td>
+                        <td className="px-4 sm:px-6 py-3 text-sm">
+                          <span
+                            className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              result.passRate >= 80 ?
+                                "bg-emerald-100 text-emerald-700"
+                              : result.passRate >= 60 ?
+                                "bg-noon-warm/20 text-noon-warm"
+                              : "bg-red-100 text-red-700"
+                            }`}>
+                            {result.passRate}%
+                          </span>
+                        </td>
+                        <td className="px-4 sm:px-6 py-3">
+                          <button
+                            onClick={() => {
+                              const quiz = classes
+                                .flatMap((c) => c.quizzes || [])
+                                .find((q) => q.id === result.id);
+                              if (quiz) handleViewQuiz(quiz);
+                            }}
+                            className="p-1 text-gray-400 hover:text-emerald-600 transition">
+                            <FaEye className="text-sm" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
 
   // Quizzes Tab
   const renderQuizzes = () => {
@@ -1097,7 +1416,6 @@ const Dashboard = () => {
                   }}
                   onView={handleViewQuiz}
                   onCompare={(quiz) => {
-                    // Navigate to quiz details to compare students
                     handleViewQuiz(quiz);
                   }}
                   loading={actionLoading}
@@ -1184,107 +1502,166 @@ const Dashboard = () => {
   };
 
   // Analytics Tab
-  const renderAnalytics = () => (
-    <div className="space-y-4 sm:space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-emerald-100/50">
-          <p className="text-xs sm:text-sm text-gray-500">Average Score</p>
-          <p className="text-2xl font-bold text-emerald-900">
-            {stats.averageScore.toFixed(1)}%
-          </p>
-          <p className="text-xs text-emerald-600">
-            <FaChartLine className="inline mr-1" />
-            Up 3.2% this month
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-noon-warm/30">
-          <p className="text-xs sm:text-sm text-gray-500">Pass Rate</p>
-          <p className="text-2xl font-bold text-noon-warm">78.5%</p>
-          <p className="text-xs text-noon-warm">
-            <FaChartLine className="inline mr-1" />
-            Up 5.1% this month
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-ocean-blue/30">
-          <p className="text-xs sm:text-sm text-gray-500">Total Submissions</p>
-          <p className="text-2xl font-bold text-ocean-blue">1,247</p>
-          <p className="text-xs text-ocean-blue">
-            <FaChartLine className="inline mr-1" />
-            Up 12.8% this month
-          </p>
-        </div>
-        <div className="bg-white rounded-xl p-4 shadow-sm border border-purple-200">
-          <p className="text-xs sm:text-sm text-gray-500">Top Performer</p>
-          <p className="text-lg font-bold text-purple-600">Student 5</p>
-          <p className="text-xs text-purple-600">
-            <FaStar className="inline mr-1" />
-            97.5% average
-          </p>
-        </div>
-      </div>
+  const renderAnalytics = () => {
+    const gradeA = classes.reduce((acc, cls) => {
+      return (
+        acc +
+        (cls.students?.filter((s) => s.avgScore >= 90 && s.avgScore <= 100)
+          .length || 0)
+      );
+    }, 0);
+    const gradeB = classes.reduce((acc, cls) => {
+      return (
+        acc +
+        (cls.students?.filter((s) => s.avgScore >= 80 && s.avgScore < 90)
+          .length || 0)
+      );
+    }, 0);
+    const gradeC = classes.reduce((acc, cls) => {
+      return (
+        acc +
+        (cls.students?.filter((s) => s.avgScore >= 70 && s.avgScore < 80)
+          .length || 0)
+      );
+    }, 0);
+    const gradeD = classes.reduce((acc, cls) => {
+      return (
+        acc +
+        (cls.students?.filter((s) => s.avgScore >= 60 && s.avgScore < 70)
+          .length || 0)
+      );
+    }, 0);
+    const gradeF = classes.reduce((acc, cls) => {
+      return (
+        acc +
+        (cls.students?.filter((s) => s.avgScore < 60 && s.avgScore > 0)
+          .length || 0)
+      );
+    }, 0);
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-        <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-          <h3 className="font-bold text-gray-800 mb-4">
-            Performance by Subject
-          </h3>
-          <div className="space-y-3">
-            {["Mathematics", "Science", "History", "English", "Physics"].map(
-              (subject, i) => (
-                <div key={i}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-gray-600">{subject}</span>
-                    <span className="font-medium text-gray-700">
-                      {80 - i * 3}%
+    return (
+      <div className="space-y-4 sm:space-y-6">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-emerald-100/50">
+            <p className="text-xs sm:text-sm text-gray-500">Average Score</p>
+            <p className="text-2xl font-bold text-emerald-900">
+              {avgScore.toFixed(1)}%
+            </p>
+            <p className="text-xs text-emerald-600">
+              <FaChartLine className="inline mr-1" />
+              {studentsWithScores} students
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-noon-warm/30">
+            <p className="text-xs sm:text-sm text-gray-500">Pass Rate</p>
+            <p className="text-2xl font-bold text-noon-warm">
+              {totalGraded > 0 ? Math.round((passed / totalGraded) * 100) : 0}%
+            </p>
+            <p className="text-xs text-noon-warm">
+              <FaChartLine className="inline mr-1" />
+              {passed} passed / {failed} failed
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-ocean-blue/30">
+            <p className="text-xs sm:text-sm text-gray-500">Total Quizzes</p>
+            <p className="text-2xl font-bold text-ocean-blue">{totalQuizzes}</p>
+            <p className="text-xs text-ocean-blue">
+              <FaChartLine className="inline mr-1" />
+              {classes.length} classes
+            </p>
+          </div>
+          <div className="bg-white rounded-xl p-4 shadow-sm border border-purple-200">
+            <p className="text-xs sm:text-sm text-gray-500">Total Students</p>
+            <p className="text-lg font-bold text-purple-600">{totalStudents}</p>
+            <p className="text-xs text-purple-600">
+              <FaStar className="inline mr-1" />
+              {totalGraded} graded
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
+            <h3 className="font-bold text-gray-800 mb-4">
+              Performance Summary
+            </h3>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">Average Score</span>
+                <span className="text-sm font-bold text-emerald-600">
+                  {avgScore.toFixed(1)}%
+                </span>
+              </div>
+              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">Pass Rate</span>
+                <span className="text-sm font-bold text-blue-600">
+                  {totalGraded > 0 ?
+                    Math.round((passed / totalGraded) * 100)
+                  : 0}
+                  %
+                </span>
+              </div>
+              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">Total Graded</span>
+                <span className="text-sm font-bold text-purple-600">
+                  {totalGraded} students
+                </span>
+              </div>
+              <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                <span className="text-sm text-gray-600">Pending</span>
+                <span className="text-sm font-bold text-amber-600">
+                  {pendingChecks} students
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
+            <h3 className="font-bold text-gray-800 mb-4">Grade Distribution</h3>
+            <div className="space-y-3">
+              {totalGraded > 0 ?
+                <>
+                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-600">A (90-100%)</span>
+                    <span className="text-sm font-bold text-green-600">
+                      {gradeA}
                     </span>
                   </div>
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-gradient-to-r from-emerald-500 to-emerald-600 h-2 rounded-full"
-                      style={{ width: `${80 - i * 3}%` }}></div>
+                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-600">B (80-89%)</span>
+                    <span className="text-sm font-bold text-blue-600">
+                      {gradeB}
+                    </span>
                   </div>
-                </div>
-              ),
-            )}
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-emerald-100/50 p-4 sm:p-6">
-          <h3 className="font-bold text-gray-800 mb-4">Recent AI Insights</h3>
-          <div className="space-y-3">
-            <div className="p-3 bg-gradient-to-r from-emerald-50 to-seashell-cream rounded-lg border border-emerald-100/50">
-              <p className="text-sm font-medium text-gray-800">
-                <FaChartLine className="inline mr-2 text-emerald-600" />
-                Top Performer Trend
-              </p>
-              <p className="text-xs text-gray-600 mt-1">
-                Students are showing 15% improvement after using AI-powered
-                feedback
-              </p>
-            </div>
-            <div className="p-3 bg-gradient-to-r from-noon-warm/10 to-noon-sun/10 rounded-lg border border-noon-warm/30">
-              <p className="text-sm font-medium text-gray-800">
-                <FaExclamationTriangle className="inline mr-2 text-noon-warm" />
-                Common Mistakes
-              </p>
-              <p className="text-xs text-gray-600 mt-1">
-                Most students struggle with questions 3 and 7 in Algebra Basics
-              </p>
-            </div>
-            <div className="p-3 bg-gradient-to-r from-ocean-blue/10 to-blue-100/20 rounded-lg border border-ocean-blue/30">
-              <p className="text-sm font-medium text-gray-800">
-                <FaRocket className="inline mr-2 text-ocean-blue" />
-                Recommendation
-              </p>
-              <p className="text-xs text-gray-600 mt-1">
-                Consider reviewing Chapter 5 before the final exam
-              </p>
+                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-600">C (70-79%)</span>
+                    <span className="text-sm font-bold text-yellow-600">
+                      {gradeC}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-600">D (60-69%)</span>
+                    <span className="text-sm font-bold text-orange-600">
+                      {gradeD}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                    <span className="text-sm text-gray-600">F (Below 60%)</span>
+                    <span className="text-sm font-bold text-red-600">
+                      {gradeF}
+                    </span>
+                  </div>
+                </>
+              : <p className="text-center text-gray-500 py-4">
+                  No grades available yet
+                </p>
+              }
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50/50 via-seashell-white to-noon-warm/5">
@@ -1352,7 +1729,7 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 py-4 sm:py-8">
-        {/* Welcome Banner - Hide when viewing quiz details */}
+        {/* Welcome Banner */}
         {activeTab !== "quiz-details" && (
           <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-4 sm:p-6 mb-6 sm:mb-8 text-white relative overflow-hidden">
             <div className="absolute top-0 right-0 w-48 h-48 bg-white/10 rounded-full -mr-24 -mt-24"></div>
@@ -1362,24 +1739,14 @@ const Dashboard = () => {
                 Welcome back, {user?.displayName?.split(" ")[0] || "Teacher"}!
               </h2>
               <p className="text-emerald-100 text-xs sm:text-sm mt-1">
-                You have {stats.pendingChecks} pending checks to review. Ready
-                to grade some papers?
+                You have {pendingChecks} pending checks to review. Ready to
+                grade some papers?
               </p>
-              <div className="flex flex-wrap gap-2 sm:gap-3 mt-3">
-                <button className="bg-white/20 backdrop-blur-sm text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-white/30 transition flex items-center gap-2">
-                  <FaUpload className="text-sm" />
-                  Upload New Quiz
-                </button>
-                <button className="bg-white/20 backdrop-blur-sm text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm hover:bg-white/30 transition flex items-center gap-2">
-                  <FaRobot className="text-sm" />
-                  AI Summary
-                </button>
-              </div>
             </div>
           </div>
         )}
 
-        {/* Navigation Tabs - Hide when viewing quiz details */}
+        {/* Navigation Tabs */}
         {activeTab !== "quiz-details" ?
           <div className="flex flex-wrap gap-1 sm:gap-2 mb-6 sm:mb-8 bg-white rounded-xl p-1 shadow-sm border border-emerald-100/50">
             {[

@@ -23,7 +23,9 @@ export const useClasses = () => {
       setLoading(true);
       const result = await firestoreService.getClasses(teacherId);
       if (result.success) {
-        setClasses(result.data);
+        // Update quiz statuses before setting classes
+        const updatedClasses = updateAllQuizStatuses(result.data);
+        setClasses(updatedClasses);
       } else {
         console.error("Failed to load classes:", result.error);
         setClasses([]);
@@ -33,6 +35,62 @@ export const useClasses = () => {
 
     loadClasses();
   }, [teacherId]);
+
+  // Helper function to determine quiz status based on date and checked students
+  const getQuizStatus = (quiz, students = []) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const quizDate = quiz.date ? new Date(quiz.date) : null;
+
+    // Check if all students have been checked
+    const totalStudents = students.length;
+    const checkedCount = quiz.checkedStudents?.length || 0;
+    const allStudentsChecked =
+      totalStudents > 0 && checkedCount >= totalStudents;
+
+    // If all students are checked, mark as completed
+    if (allStudentsChecked) {
+      return "completed";
+    }
+
+    // If no date is set, default to active
+    if (!quizDate) {
+      return "active";
+    }
+
+    // Compare dates (ignoring time)
+    const quizDateOnly = new Date(quizDate);
+    quizDateOnly.setHours(0, 0, 0, 0);
+
+    if (quizDateOnly < today) {
+      return "active"; 
+    } else if (quizDateOnly.getTime() === today.getTime()) {
+      return "active"; 
+    } else {
+      return "upcoming"; // Future date = upcoming
+    }
+  };
+
+  // Helper function to update all quiz statuses in classes
+  const updateAllQuizStatuses = (classesData) => {
+    return classesData.map((cls) => {
+      const updatedQuizzes = (cls.quizzes || []).map((quiz) => {
+        const newStatus = getQuizStatus(quiz, cls.students || []);
+        return { ...quiz, status: newStatus };
+      });
+      return { ...cls, quizzes: updatedQuizzes };
+    });
+  };
+
+  // Helper function to update quiz status for a specific class
+  const updateQuizStatusesForClass = (classData) => {
+    const updatedQuizzes = (classData.quizzes || []).map((quiz) => {
+      const newStatus = getQuizStatus(quiz, classData.students || []);
+      return { ...quiz, status: newStatus };
+    });
+    return { ...classData, quizzes: updatedQuizzes };
+  };
 
   const addClass = useCallback(
     async (className, description = "") => {
@@ -57,7 +115,8 @@ export const useClasses = () => {
           // Reload classes to get the latest data
           const reloadResult = await firestoreService.getClasses(teacherId);
           if (reloadResult.success) {
-            setClasses(reloadResult.data);
+            const updatedClasses = updateAllQuizStatuses(reloadResult.data);
+            setClasses(updatedClasses);
           }
           return { success: true, class: { id: result.id, ...newClass } };
         }
@@ -149,7 +208,7 @@ export const useClasses = () => {
           quizzesTaken: 0,
           avgScore: 0,
           status: "Active",
-          quizScores: {}, // Add this to store individual quiz scores
+          quizScores: {},
         };
 
         const result = await firestoreService.addStudentToClass(
@@ -158,15 +217,18 @@ export const useClasses = () => {
         );
         if (result.success) {
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   students: [...(c.students || []), newStudent],
                   studentCount: (c.students?.length || 0) + 1,
-                }
-              : c,
-            ),
+                };
+                // Update quiz statuses since student count changed
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true, student: newStudent };
         }
@@ -193,17 +255,20 @@ export const useClasses = () => {
         );
         if (result.success) {
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   students: (c.students || []).filter(
                     (s) => s.id !== studentId,
                   ),
                   studentCount: Math.max((c.students?.length || 0) - 1, 0),
-                }
-              : c,
-            ),
+                };
+                // Update quiz statuses since student count changed
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true };
         }
@@ -268,14 +333,12 @@ export const useClasses = () => {
     [teacherId],
   );
 
-  // NEW: Update student score after quiz comparison
   const updateStudentScore = useCallback(
     async (classId, studentId, quizId, score, details) => {
       if (!teacherId) return { success: false, error: "No teacher logged in" };
 
       setActionLoading(true);
       try {
-        // Find the class and student
         const classData = classes.find((c) => c.id === classId);
         if (!classData) {
           return { success: false, error: "Class not found" };
@@ -286,7 +349,12 @@ export const useClasses = () => {
           return { success: false, error: "Student not found" };
         }
 
-        // Prepare the updated student data
+        // Find the quiz to update checkedStudents
+        const quiz = classData.quizzes?.find((q) => q.id === quizId);
+        if (!quiz) {
+          return { success: false, error: "Quiz not found" };
+        }
+
         const quizScores = student.quizScores || {};
         quizScores[quizId] = {
           score,
@@ -294,7 +362,6 @@ export const useClasses = () => {
           date: new Date().toISOString(),
         };
 
-        // Calculate new average
         const scores = Object.values(quizScores).map((q) => q.score);
         const avgScore =
           scores.length > 0 ?
@@ -309,30 +376,58 @@ export const useClasses = () => {
           lastUpdated: new Date().toISOString(),
         };
 
-        // Update in Firestore using the existing updateStudentInClass function
-        const result = await firestoreService.updateStudentInClass(
+        // Add student to checkedStudents if not already there
+        const checkedStudents = quiz.checkedStudents || [];
+        if (!checkedStudents.includes(studentId)) {
+          checkedStudents.push(studentId);
+        }
+
+        // Update the quiz with the new checkedStudents list
+        const updatedQuiz = {
+          ...quiz,
+          checkedStudents: checkedStudents,
+        };
+
+        // Update both the student and the quiz in Firestore
+        const studentResult = await firestoreService.updateStudentInClass(
           classId,
           studentId,
           updatedStudent,
         );
 
-        if (result.success) {
-          // Update local state
+        if (!studentResult.success) {
+          return { success: false, error: studentResult.error };
+        }
+
+        const quizResult = await firestoreService.updateQuizInClass(
+          classId,
+          quizId,
+          { checkedStudents: checkedStudents },
+        );
+
+        if (quizResult.success) {
+          // Update local state and recheck quiz statuses
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   students: (c.students || []).map((s) =>
                     s.id === studentId ? updatedStudent : s,
                   ),
-                }
-              : c,
-            ),
+                  quizzes: (c.quizzes || []).map((q) =>
+                    q.id === quizId ? updatedQuiz : q,
+                  ),
+                };
+                // Update quiz statuses (a student was checked)
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true, student: updatedStudent };
         }
-        return { success: false, error: result.error };
+        return { success: false, error: quizResult.error };
       } catch (error) {
         console.error("Error in updateStudentScore:", error);
         return { success: false, error: error.message };
@@ -352,28 +447,51 @@ export const useClasses = () => {
 
       setActionLoading(true);
       try {
+        // Get the class to access students
+        const classData = classes.find((c) => c.id === classId);
+        const students = classData?.students || [];
+
+        // Calculate initial status based on date
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const quizDate = quizData.date ? new Date(quizData.date) : null;
+
+        let initialStatus = "active"; // default
+        if (quizDate) {
+          const quizDateOnly = new Date(quizDate);
+          quizDateOnly.setHours(0, 0, 0, 0);
+          if (quizDateOnly > today) {
+            initialStatus = "upcoming";
+          } else {
+            initialStatus = "active";
+          }
+        }
+
         const newQuiz = {
           id: `quiz_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           title: quizData.title.trim(),
           description: quizData.description?.trim() || "",
           date: quizData.date || new Date().toISOString().split("T")[0],
           totalQuestions: parseInt(quizData.totalQuestions) || 10,
-          status: quizData.status || "active",
+          status: initialStatus,
           createdAt: new Date().toISOString(),
-          checkedStudents: [], // Track which students have been checked
+          checkedStudents: [],
         };
 
         const result = await firestoreService.addQuizToClass(classId, newQuiz);
         if (result.success) {
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   quizzes: [...(c.quizzes || []), newQuiz],
-                }
-              : c,
-            ),
+                };
+                // Recalculate all quiz statuses for this class
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true, quiz: newQuiz };
         }
@@ -385,7 +503,7 @@ export const useClasses = () => {
         setActionLoading(false);
       }
     },
-    [teacherId],
+    [teacherId, classes],
   );
 
   const editQuiz = useCallback(
@@ -412,16 +530,19 @@ export const useClasses = () => {
         );
         if (result.success) {
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   quizzes: (c.quizzes || []).map((q) =>
                     q.id === quizId ? { ...q, ...updatedQuiz } : q,
                   ),
-                }
-              : c,
-            ),
+                };
+                // Recalculate all quiz statuses for this class
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true };
         }
@@ -448,14 +569,17 @@ export const useClasses = () => {
         );
         if (result.success) {
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   quizzes: (c.quizzes || []).filter((q) => q.id !== quizId),
-                }
-              : c,
-            ),
+                };
+                // Recalculate all quiz statuses for this class
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true };
         }
@@ -483,16 +607,19 @@ export const useClasses = () => {
         );
         if (result.success) {
           setClasses((prev) =>
-            prev.map((c) =>
-              c.id === classId ?
-                {
+            prev.map((c) => {
+              if (c.id === classId) {
+                const updatedClass = {
                   ...c,
                   quizzes: (c.quizzes || []).map((q) =>
                     q.id === quizId ? { ...q, ...quizData } : q,
                   ),
-                }
-              : c,
-            ),
+                };
+                // Recalculate all quiz statuses for this class
+                return updateQuizStatusesForClass(updatedClass);
+              }
+              return c;
+            }),
           );
           return { success: true };
         }
@@ -524,12 +651,11 @@ export const useClasses = () => {
     addStudent,
     removeStudent,
     editStudent,
-    updateStudentScore, 
+    updateStudentScore,
     addQuiz,
     editQuiz,
     deleteQuiz,
     updateQuiz,
-
     getClassById,
   };
 };

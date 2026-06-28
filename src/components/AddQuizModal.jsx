@@ -15,37 +15,30 @@ const AddQuizModal = ({
   const [description, setDescription] = useState("");
   const [date, setDate] = useState("");
   const [totalQuestions, setTotalQuestions] = useState(10);
-  const [status, setStatus] = useState("active");
   const [selectedClassId, setSelectedClassId] = useState(classId || "");
   const [error, setError] = useState("");
 
   const isEditMode = !!quizToEdit;
 
-  // Use useEffect with a flag to prevent unnecessary updates
+  // Reset form when modal opens/closes or quiz changes
   useEffect(() => {
-    // Only update when modal opens or quiz changes
     if (isOpen) {
-      // Use a timeout to avoid synchronous state updates
-      const timer = setTimeout(() => {
-        if (quizToEdit) {
-          setTitle(quizToEdit.title || "");
-          setDescription(quizToEdit.description || "");
-          setDate(quizToEdit.date || "");
-          setTotalQuestions(quizToEdit.totalQuestions || 10);
-          setStatus(quizToEdit.status || "active");
-          setSelectedClassId(classId || "");
-        } else {
-          setTitle("");
-          setDescription("");
-          setDate(new Date().toISOString().split("T")[0]);
-          setTotalQuestions(10);
-          setStatus("active");
-          setSelectedClassId(classId || "");
-        }
-        setError("");
-      }, 0);
+      // Reset all fields first
+      setTitle("");
+      setDescription("");
+      setDate(new Date().toISOString().split("T")[0]);
+      setTotalQuestions(10);
+      setSelectedClassId(classId || "");
+      setError("");
 
-      return () => clearTimeout(timer);
+      // If editing, populate with quiz data
+      if (quizToEdit) {
+        setTitle(quizToEdit.title || "");
+        setDescription(quizToEdit.description || "");
+        setDate(quizToEdit.date || new Date().toISOString().split("T")[0]);
+        setTotalQuestions(quizToEdit.totalQuestions || 10);
+        setSelectedClassId(classId || "");
+      }
     }
   }, [isOpen, quizToEdit, classId]);
 
@@ -70,17 +63,15 @@ const AddQuizModal = ({
       description: description.trim(),
       date,
       totalQuestions,
-      status,
     });
 
     if (result && result.success) {
       // Reset form after successful submission
       setTitle("");
       setDescription("");
-      setDate("");
+      setDate(new Date().toISOString().split("T")[0]);
       setTotalQuestions(10);
-      setStatus("active");
-      setSelectedClassId("");
+      setSelectedClassId(classId || "");
       setError("");
       onClose();
     } else if (result && result.error) {
@@ -91,10 +82,9 @@ const AddQuizModal = ({
   const handleClose = () => {
     setTitle("");
     setDescription("");
-    setDate("");
+    setDate(new Date().toISOString().split("T")[0]);
     setTotalQuestions(10);
-    setStatus("active");
-    setSelectedClassId("");
+    setSelectedClassId(classId || "");
     setError("");
     onClose();
   };
@@ -200,7 +190,7 @@ const AddQuizModal = ({
               <label
                 htmlFor="quizDate"
                 className="block text-sm font-medium text-gray-700 mb-1.5">
-                Date
+                Date <span className="text-gray-400 text-xs">(optional)</span>
               </label>
               <input
                 id="quizDate"
@@ -228,23 +218,6 @@ const AddQuizModal = ({
                 className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition text-sm"
               />
             </div>
-          </div>
-
-          <div>
-            <label
-              htmlFor="quizStatus"
-              className="block text-sm font-medium text-gray-700 mb-1.5">
-              Status
-            </label>
-            <select
-              id="quizStatus"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition text-sm">
-              <option value="active">Active</option>
-              <option value="upcoming">Upcoming</option>
-              <option value="completed">Completed</option>
-            </select>
           </div>
 
           <div className="flex gap-3 pt-2">
