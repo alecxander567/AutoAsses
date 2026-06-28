@@ -1,5 +1,5 @@
 // src/components/NotificationDropdown.jsx
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   FaBell,
   FaCalendarAlt,
@@ -23,8 +23,8 @@ const NotificationDropdown = ({ classes }) => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Derive notifications from classes (no setState in effect)
-  const notifications = useMemo(() => {
+  // Derive notifications from classes (simplified, no useMemo)
+  const getNotifications = () => {
     const result = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -84,12 +84,29 @@ const NotificationDropdown = ({ classes }) => {
     });
 
     return result;
-  }, [classes]);
+  };
 
-  const unreadCount = useMemo(
-    () => notifications.filter((n) => !readIds.has(n.id)).length,
-    [notifications, readIds],
-  );
+  const notifications = getNotifications();
+
+  // Mark all as read when dropdown is opened
+  useEffect(() => {
+    if (isOpen) {
+      const allNotificationIds = notifications.map((n) => n.id);
+      setReadIds((prev) => {
+        const newSet = new Set(prev);
+        let hasNew = false;
+        allNotificationIds.forEach((id) => {
+          if (!newSet.has(id)) {
+            newSet.add(id);
+            hasNew = true;
+          }
+        });
+        return hasNew ? newSet : prev;
+      });
+    }
+  }, [isOpen, notifications]);
+
+  const unreadCount = notifications.filter((n) => !readIds.has(n.id)).length;
 
   const handleNotificationClick = (notification) => {
     setReadIds((prev) => new Set([...prev, notification.id]));
@@ -236,7 +253,7 @@ const NotificationDropdown = ({ classes }) => {
 
       {isOpen && (
         <>
-          {/* Mobile: centered panel with top spacing to avoid overlapping */}
+          {/* Mobile: centered panel with top spacing */}
           <div className="sm:hidden fixed inset-0 z-50 flex items-start justify-center px-4 pt-16">
             <div
               className="absolute inset-0 bg-black/30 backdrop-blur-sm"
@@ -247,7 +264,7 @@ const NotificationDropdown = ({ classes }) => {
             </div>
           </div>
 
-          {/* Desktop/tablet (sm and up): original anchored dropdown */}
+          {/* Desktop/tablet (sm and up): anchored dropdown */}
           <div className="hidden sm:block absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-2xl border border-emerald-100/50 overflow-hidden z-50">
             {panelContent}
           </div>

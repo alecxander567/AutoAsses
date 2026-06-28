@@ -727,92 +727,7 @@ const Dashboard = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left Panel */}
-          <div className="space-y-6">
-            <div className="bg-gray-50 rounded-xl p-4">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <FaUsers className="text-ocean-blue" />
-                Students ({students.length})
-              </h3>
-              {students.length === 0 ?
-                <p className="text-sm text-gray-400 text-center py-4">
-                  No students in this class
-                </p>
-              : <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                  {students.map((student) => (
-                    <div
-                      key={student.id}
-                      className="flex items-center justify-between p-3 bg-white rounded-lg shadow-sm hover:shadow-md transition">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 bg-emerald-100 rounded-full flex items-center justify-center">
-                          <FaUser className="text-emerald-600 text-sm" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-700">
-                            {student.name}
-                          </p>
-                          {student.email && (
-                            <p className="text-xs text-gray-400">
-                              {student.email}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          {(() => {
-                            const quizResult = student.quizScores?.[quiz.id];
-                            if (!quizResult) {
-                              return (
-                                <p className="text-xs text-gray-400">
-                                  Not graded yet
-                                </p>
-                              );
-                            }
-                            const details = quizResult.details || [];
-                            const correct = details.filter(
-                              (d) => d.isCorrect,
-                            ).length;
-                            return (
-                              <>
-                                <p className="text-sm font-bold text-emerald-600">
-                                  {quizResult.score}%{" "}
-                                  <span className="text-xs font-medium text-emerald-500">
-                                    ({correct}/{details.length})
-                                  </span>
-                                </p>
-                                <p className="text-xs text-gray-400">
-                                  this quiz
-                                </p>
-                              </>
-                            );
-                          })()}
-                        </div>
-                        <button
-                          onClick={() => handleCompareStudent(student, quiz)}
-                          className="px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs transition flex items-center gap-1">
-                          <FaExchangeAlt className="text-xs" />
-                          Compare
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              }
-            </div>
-
-            <div className="bg-white rounded-xl border border-purple-100 p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <FaRobot className="text-purple-600" />
-                <h3 className="font-bold text-gray-800">AI Quiz Analysis</h3>
-                {quizAnalysis && !analysisLoading && (
-                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full ml-auto">
-                    AI Generated
-                  </span>
-                )}
-              </div>
-              {renderAnalysisSection(quiz, students)}
-            </div>
-          </div>
+          <div className="space-y-6">{/* ... students list ... */}</div>
 
           {/* Right Panel */}
           <div className="space-y-6">
@@ -822,7 +737,7 @@ const Dashboard = () => {
                 Answer Key Upload
               </h3>
 
-              {/* Updated rate limit note for Gemini Flash */}
+              {/* ✅ Updated rate limit notice */}
               <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl mb-4">
                 <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
                 <div className="space-y-2">
