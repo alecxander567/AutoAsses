@@ -1,5 +1,5 @@
 // src/components/CompareStudentModal.jsx
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   FaTimes,
   FaUpload,
@@ -14,7 +14,13 @@ import {
   FaGraduationCap,
   FaChartPie,
 } from "react-icons/fa";
-import { compareAnswersWithGemini } from "../services/googleAIService";
+import { createWorker } from "tesseract.js";
+
+// Confidence threshold (0-100, as returned by Tesseract) below which we
+// treat a recognized answer as "unclear" rather than trusting it. Single
+// handwritten letters are exactly the case Tesseract is least confident
+// about, so this matters more here than it would for printed text.
+const MIN_WORD_CONFIDENCE = 55;
 
 const CompareStudentModal = ({
   isOpen,
@@ -31,10 +37,247 @@ const CompareStudentModal = ({
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
 
-  // NOTE: OCR (Tesseract) has been removed entirely. Gemini Vision reads
-  // both images directly and does extraction + comparison in one call,
-  // which handles handwriting far better than Tesseract's printed-text
-  // model ever could. See googleAIService.compareAnswersWithGemini.
+  // Reuse a single Tesseract worker for the lifetime of the modal instead
+  // of spinning up + tearing down a new one on every comparison.
+  const workerRef = useRef(null);
+
+  // Shared worker configuration. PSM 11 ("sparse text, no particular
+  // order") replaces the previous PSM 6 ("single uniform block"). PSM 6
+  // assumes the page reads like a coherent paragraph -- fine for printed
+  // text, but handwritten "1. B" / "2. D" lines are really isolated
+  // fragments with inconsistent spacing and baselines, which PSM 6 tends
+  // to merge or mis-split. PSM 11 looks for text wherever it can find it
+  // without assuming a layout, which tolerates handwriting's irregularity
+  // better.
+  //
+  // Declared above the effects that call it (and as a plain function
+  // rather than relying on closures over component state) so it's fully
+  // defined before anything references it, with no use-before-declaration
+  // or stale-dependency concerns.
+  const configureWorker = async (worker) => {
+    await worker.setParameters({
+      tessedit_char_whitelist: "0123456789ABCD.) ",
+      tessedit_pageseg_mode: "11",
+    });
+  };
+
+  useEffect(() => {
+    if (isOpen && !workerRef.current) {
+      (async () => {
+        try {
+          const worker = await createWorker("eng");
+          await configureWorker(worker);
+          workerRef.current = worker;
+        } catch (err) {
+          console.error("Failed to initialize OCR worker:", err);
+        }
+      })();
+    }
+
+    return () => {
+      if (!isOpen && workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
+
+  // Preprocess the image before handing it to Tesseract. Handwriting OCR
+  // accuracy is highly sensitive to contrast and resolution -- a normal
+  // phone photo has soft grayscale gradients and JPEG noise around pencil/
+  // pen strokes that confuse the model. Converting to high-contrast
+  // black-and-white and upscaling small images gives Tesseract cleaner,
+  // larger glyphs to work with.
+  const preprocessImage = (file) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+
+      img.onload = () => {
+        try {
+          // Upscale small images; handwriting on a downscaled/compressed
+          // photo loses the fine stroke detail OCR needs.
+          const scale = img.width < 1200 ? 1200 / img.width : 1;
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+
+          // Convert to grayscale, then binarize with a fixed threshold.
+          // This turns soft pencil/pen strokes and paper texture into
+          // crisp black-on-white, which is what Tesseract's models were
+          // primarily trained against.
+          const threshold = 150;
+          for (let i = 0; i < data.length; i += 4) {
+            const gray =
+              data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+            const value = gray < threshold ? 0 : 255;
+            data[i] = data[i + 1] = data[i + 2] = value;
+          }
+          ctx.putImageData(imageData, 0, 0);
+
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(url);
+            if (!blob) {
+              reject(new Error("Failed to preprocess image"));
+              return;
+            }
+            resolve(
+              new File([blob], file.name || "processed.png", {
+                type: "image/png",
+              }),
+            );
+          }, "image/png");
+        } catch (err) {
+          URL.revokeObjectURL(url);
+          reject(err);
+        }
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Failed to load image for preprocessing"));
+      };
+
+      img.src = url;
+    });
+  };
+
+  // OCR with per-word confidence. Returns { text, words } where words
+  // carry Tesseract's own confidence score for each recognized token, so
+  // parseAnswers can fall back to "unclear" instead of trusting a
+  // low-confidence misread.
+  const extractTextFromImage = async (imageSource) => {
+    try {
+      if (!workerRef.current) {
+        workerRef.current = await createWorker("eng");
+        await configureWorker(workerRef.current);
+      }
+      const processed = await preprocessImage(imageSource);
+      const { data } = await workerRef.current.recognize(processed);
+      return { text: data.text, words: data.words || [] };
+    } catch (err) {
+      console.error("OCR Error:", err);
+      return { text: "", words: [] };
+    }
+  };
+
+  const parseAnswers = (text, words) => {
+    const answers = {};
+    const lines = text.split("\n");
+
+    for (const line of lines) {
+      // Look for patterns like "1. A", "1 A", "1) A", etc. No `$` anchor
+      // at the end -- OCR frequently appends a stray trailing character
+      // after a correctly-read letter, and anchoring the end would fail
+      // the whole line on one noise character.
+      const match = line.match(/^\s*(\d{1,2})[.):]?\s*([A-D])/i);
+      if (match) {
+        const questionNumber = parseInt(match[1], 10);
+        const letter = match[2].toUpperCase();
+
+        // Cross-check against word-level confidence when we have it. If
+        // Tesseract itself wasn't confident about the recognized letter,
+        // treat this as unreadable rather than silently trusting a guess
+        // -- this matters far more for handwriting than printed text.
+        const matchingWord = words.find(
+          (w) => w.text && w.text.toUpperCase().includes(letter),
+        );
+        if (matchingWord && matchingWord.confidence < MIN_WORD_CONFIDENCE) {
+          answers[questionNumber] = null;
+        } else {
+          answers[questionNumber] = letter;
+        }
+        continue;
+      }
+
+      // A line with just a question number and no letter at all means
+      // the question was left blank. Record explicitly as `null` so
+      // compareAnswers can tell "left blank" apart from "OCR found
+      // nothing at all for this line".
+      const blankMatch = line.match(/^\s*(\d{1,2})[.):]?\s*$/);
+      if (blankMatch) {
+        answers[parseInt(blankMatch[1], 10)] = null;
+      }
+    }
+
+    return answers;
+  };
+
+  const compareAnswers = (answerKeyResult, studentResult) => {
+    const answerKeyMap = parseAnswers(
+      answerKeyResult.text,
+      answerKeyResult.words,
+    );
+    const studentAnswerMap = parseAnswers(
+      studentResult.text,
+      studentResult.words,
+    );
+
+    // Only count questions that actually exist on the answer key, so a
+    // question the student left blank (and so never appears in their
+    // parsed answers) still counts as wrong rather than being silently
+    // excluded from the denominator.
+    const questionNumbers = Object.keys(answerKeyMap)
+      .map(Number)
+      .sort((a, b) => a - b);
+
+    if (questionNumbers.length === 0) {
+      throw new Error(
+        'Could not read any answers from the answer key image. Make sure it\'s a clear photo of the answer list (e.g. "1. B", "2. D", ...).',
+      );
+    }
+
+    let correct = 0;
+    let total = 0;
+    const details = [];
+
+    questionNumbers.forEach((questionNumber) => {
+      const correctAnswer = answerKeyMap[questionNumber];
+      if (!correctAnswer) {
+        // The key itself doesn't have a usable answer for this question
+        // -- skip rather than penalize the student for an unreadable key.
+        return;
+      }
+
+      total++;
+      const studentAnswer = studentAnswerMap[questionNumber] ?? null;
+      const isCorrect = studentAnswer === correctAnswer;
+      if (isCorrect) correct++;
+
+      details.push({
+        questionNumber,
+        studentAnswer, // may be null: left blank or unreadable
+        correctAnswer,
+        isCorrect,
+      });
+    });
+
+    const score = total > 0 ? Math.round((correct / total) * 100) : 0;
+    const grade = getGrade(score);
+
+    return {
+      score,
+      correct,
+      total,
+      details,
+      grade,
+    };
+  };
 
   const getGrade = (score) => {
     if (score >= 90)
@@ -117,8 +360,6 @@ const CompareStudentModal = ({
     setError(null);
 
     try {
-      // Fetch the answer key image from Cloudinary so we have a File
-      // object to hand to Gemini, same as before.
       const answerKeyResponse = await fetch(answerKeyUrl);
       if (!answerKeyResponse.ok) {
         throw new Error("Could not load the answer key image.");
@@ -128,28 +369,10 @@ const CompareStudentModal = ({
         type: answerKeyBlob.type || "image/jpeg",
       });
 
-      const geminiResult = await compareAnswersWithGemini(
-        answerKeyFile,
-        studentSheetFile,
-      );
+      const answerKeyResult = await extractTextFromImage(answerKeyFile);
+      const studentResult = await extractTextFromImage(studentSheetFile);
 
-      // compareAnswersWithGemini can come back undefined if Gemini's
-      // response wasn't valid JSON (logged inside the service). Guard
-      // against that instead of crashing on `.score`.
-      if (!geminiResult || typeof geminiResult.score !== "number") {
-        throw new Error(
-          "Could not read the answer sheets clearly. Please try a clearer photo.",
-        );
-      }
-
-      const comparison = {
-        score: geminiResult.score,
-        correct: geminiResult.correct,
-        total: geminiResult.total,
-        details: geminiResult.details || [],
-        grade: getGrade(geminiResult.score),
-      };
-
+      const comparison = compareAnswers(answerKeyResult, studentResult);
       setResult(comparison);
 
       if (onCompareComplete) {
@@ -268,8 +491,9 @@ const CompareStudentModal = ({
                         </li>
                         <li>
                           <span className="font-medium">Image quality:</span>{" "}
-                          Use a clear, well-lit, flat photo. Blurry or skewed
-                          images reduce accuracy.
+                          Use a clear, well-lit, flat photo with letters written
+                          large and dark. Blurry, skewed, or faint handwriting
+                          reduces OCR accuracy.
                         </li>
                       </ul>
                     </div>
