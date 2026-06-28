@@ -16,10 +16,6 @@ import {
 } from "react-icons/fa";
 import { createWorker } from "tesseract.js";
 
-// Confidence threshold (0-100, as returned by Tesseract) below which we
-// treat a recognized answer as "unclear" rather than trusting it. Single
-// handwritten letters are exactly the case Tesseract is least confident
-// about, so this matters more here than it would for printed text.
 const MIN_WORD_CONFIDENCE = 55;
 
 const CompareStudentModal = ({
@@ -36,24 +32,8 @@ const CompareStudentModal = ({
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
-
-  // Reuse a single Tesseract worker for the lifetime of the modal instead
-  // of spinning up + tearing down a new one on every comparison.
   const workerRef = useRef(null);
 
-  // Shared worker configuration. PSM 11 ("sparse text, no particular
-  // order") replaces the previous PSM 6 ("single uniform block"). PSM 6
-  // assumes the page reads like a coherent paragraph -- fine for printed
-  // text, but handwritten "1. B" / "2. D" lines are really isolated
-  // fragments with inconsistent spacing and baselines, which PSM 6 tends
-  // to merge or mis-split. PSM 11 looks for text wherever it can find it
-  // without assuming a layout, which tolerates handwriting's irregularity
-  // better.
-  //
-  // Declared above the effects that call it (and as a plain function
-  // rather than relying on closures over component state) so it's fully
-  // defined before anything references it, with no use-before-declaration
-  // or stale-dependency concerns.
   const configureWorker = async (worker) => {
     await worker.setParameters({
       tessedit_char_whitelist: "0123456789ABCD.) ",
@@ -92,12 +72,6 @@ const CompareStudentModal = ({
     };
   }, []);
 
-  // Preprocess the image before handing it to Tesseract. Handwriting OCR
-  // accuracy is highly sensitive to contrast and resolution -- a normal
-  // phone photo has soft grayscale gradients and JPEG noise around pencil/
-  // pen strokes that confuse the model. Converting to high-contrast
-  // black-and-white and upscaling small images gives Tesseract cleaner,
-  // larger glyphs to work with.
   const preprocessImage = (file) => {
     return new Promise((resolve, reject) => {
       const img = new Image();
@@ -105,8 +79,6 @@ const CompareStudentModal = ({
 
       img.onload = () => {
         try {
-          // Upscale small images; handwriting on a downscaled/compressed
-          // photo loses the fine stroke detail OCR needs.
           const scale = img.width < 1200 ? 1200 / img.width : 1;
           const canvas = document.createElement("canvas");
           canvas.width = Math.round(img.width * scale);
@@ -117,10 +89,6 @@ const CompareStudentModal = ({
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           const data = imageData.data;
 
-          // Convert to grayscale, then binarize with a fixed threshold.
-          // This turns soft pencil/pen strokes and paper texture into
-          // crisp black-on-white, which is what Tesseract's models were
-          // primarily trained against.
           const threshold = 150;
           for (let i = 0; i < data.length; i += 4) {
             const gray =
@@ -157,10 +125,6 @@ const CompareStudentModal = ({
     });
   };
 
-  // OCR with per-word confidence. Returns { text, words } where words
-  // carry Tesseract's own confidence score for each recognized token, so
-  // parseAnswers can fall back to "unclear" instead of trusting a
-  // low-confidence misread.
   const extractTextFromImage = async (imageSource) => {
     try {
       if (!workerRef.current) {
@@ -181,19 +145,11 @@ const CompareStudentModal = ({
     const lines = text.split("\n");
 
     for (const line of lines) {
-      // Look for patterns like "1. A", "1 A", "1) A", etc. No `$` anchor
-      // at the end -- OCR frequently appends a stray trailing character
-      // after a correctly-read letter, and anchoring the end would fail
-      // the whole line on one noise character.
       const match = line.match(/^\s*(\d{1,2})[.):]?\s*([A-D])/i);
       if (match) {
         const questionNumber = parseInt(match[1], 10);
         const letter = match[2].toUpperCase();
 
-        // Cross-check against word-level confidence when we have it. If
-        // Tesseract itself wasn't confident about the recognized letter,
-        // treat this as unreadable rather than silently trusting a guess
-        // -- this matters far more for handwriting than printed text.
         const matchingWord = words.find(
           (w) => w.text && w.text.toUpperCase().includes(letter),
         );
@@ -205,10 +161,6 @@ const CompareStudentModal = ({
         continue;
       }
 
-      // A line with just a question number and no letter at all means
-      // the question was left blank. Record explicitly as `null` so
-      // compareAnswers can tell "left blank" apart from "OCR found
-      // nothing at all for this line".
       const blankMatch = line.match(/^\s*(\d{1,2})[.):]?\s*$/);
       if (blankMatch) {
         answers[parseInt(blankMatch[1], 10)] = null;
@@ -228,10 +180,6 @@ const CompareStudentModal = ({
       studentResult.words,
     );
 
-    // Only count questions that actually exist on the answer key, so a
-    // question the student left blank (and so never appears in their
-    // parsed answers) still counts as wrong rather than being silently
-    // excluded from the denominator.
     const questionNumbers = Object.keys(answerKeyMap)
       .map(Number)
       .sort((a, b) => a - b);
@@ -248,20 +196,25 @@ const CompareStudentModal = ({
 
     questionNumbers.forEach((questionNumber) => {
       const correctAnswer = answerKeyMap[questionNumber];
-      if (!correctAnswer) {
-        // The key itself doesn't have a usable answer for this question
-        // -- skip rather than penalize the student for an unreadable key.
-        return;
-      }
+      if (!correctAnswer) return;
 
       total++;
-      const studentAnswer = studentAnswerMap[questionNumber] ?? null;
+
+      // THREE states for student answer:
+      //   string (e.g. "A")  → OCR read a letter
+      //   null               → OCR found the line but answer was blank or low-confidence
+      //   "?"                → OCR found no line at all for this question number
+      const studentAnswer =
+        questionNumber in studentAnswerMap ?
+          studentAnswerMap[questionNumber]
+        : "?";
+
       const isCorrect = studentAnswer === correctAnswer;
       if (isCorrect) correct++;
 
       details.push({
         questionNumber,
-        studentAnswer, // may be null: left blank or unreadable
+        studentAnswer,
         correctAnswer,
         isCorrect,
       });
@@ -270,13 +223,7 @@ const CompareStudentModal = ({
     const score = total > 0 ? Math.round((correct / total) * 100) : 0;
     const grade = getGrade(score);
 
-    return {
-      score,
-      correct,
-      total,
-      details,
-      grade,
-    };
+    return { score, correct, total, details, grade };
   };
 
   const getGrade = (score) => {
@@ -335,22 +282,17 @@ const CompareStudentModal = ({
     setResult(null);
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setPreviewUrl(reader.result);
-    };
+    reader.onloadend = () => setPreviewUrl(reader.result);
     reader.readAsDataURL(file);
   };
 
-  const handleUploadClick = () => {
-    fileInputRef.current?.click();
-  };
+  const handleUploadClick = () => fileInputRef.current?.click();
 
   const handleCompare = async () => {
     if (!studentSheetFile) {
       setError("Please select a student answer sheet image");
       return;
     }
-
     if (!answerKeyUrl) {
       setError("Please upload an answer key first");
       return;
@@ -361,9 +303,8 @@ const CompareStudentModal = ({
 
     try {
       const answerKeyResponse = await fetch(answerKeyUrl);
-      if (!answerKeyResponse.ok) {
+      if (!answerKeyResponse.ok)
         throw new Error("Could not load the answer key image.");
-      }
       const answerKeyBlob = await answerKeyResponse.blob();
       const answerKeyFile = new File([answerKeyBlob], "answer-key.jpg", {
         type: answerKeyBlob.type || "image/jpeg",
@@ -392,10 +333,23 @@ const CompareStudentModal = ({
     setResult(null);
     setError(null);
     setComparing(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
     onClose();
+  };
+
+  // Helper: classify each question for styling
+  const getQuestionStatus = (detail) => {
+    if (detail.isCorrect) return "correct";
+    if (detail.studentAnswer === null || detail.studentAnswer === "?")
+      return "unclear";
+    return "wrong";
+  };
+
+  const statusLabel = (detail) => {
+    if (detail.isCorrect) return null;
+    if (detail.studentAnswer === "?") return "not found";
+    if (detail.studentAnswer === null) return "blank";
+    return null;
   };
 
   if (!isOpen) return null;
@@ -403,12 +357,11 @@ const CompareStudentModal = ({
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-center justify-center p-4">
-        {/* Backdrop */}
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm"
-          onClick={handleClose}></div>
+          onClick={handleClose}
+        />
 
-        {/* Modal */}
         <div className="relative bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
           {/* Header */}
           <div className="sticky top-0 bg-white z-10 border-b border-gray-100 px-6 py-4 flex items-center justify-between">
@@ -418,7 +371,7 @@ const CompareStudentModal = ({
                 Compare Student Answers
               </h3>
               <p className="text-sm text-gray-500 mt-1">
-                {quizTitle} - {student?.name}
+                {quizTitle} — {student?.name}
               </p>
             </div>
             <button
@@ -451,213 +404,294 @@ const CompareStudentModal = ({
               )}
             </div>
 
-            {/* Upload Section */}
-            {
-              !result ?
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <FaFileImage className="text-emerald-500" />
-                    <span>
-                      Upload the student's answer sheet image to compare with
-                      the answer key
-                    </span>
-                  </div>
-
-                  {/* Important Notice */}
-                  <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
-                    <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
-                    <div className="space-y-2 text-sm">
-                      <p className="font-semibold text-amber-800">
-                        Important — Before You Upload
-                      </p>
-                      <ul className="space-y-1 text-amber-700 text-xs leading-relaxed">
-                        <li>
-                          <span className="font-medium">Accepted formats:</span>{" "}
-                          PNG, JPG, and JPEG only. PDFs and other file types are
-                          not supported.
-                        </li>
-                        <li>
-                          <span className="font-medium">Max file size:</span> 10
-                          MB per image. Larger files will be rejected.
-                        </li>
-                        <li>
-                          <span className="font-medium">Rate limit:</span> You
-                          can compare up to{" "}
-                          <span className="font-medium">
-                            10 sheets per minute
-                          </span>
-                          . Uploading too quickly will temporarily pause
-                          processing — wait a moment and try again.
-                        </li>
-                        <li>
-                          <span className="font-medium">Image quality:</span>{" "}
-                          Use a clear, well-lit, flat photo with letters written
-                          large and dark. Blurry, skewed, or faint handwriting
-                          reduces OCR accuracy.
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  <div
-                    onClick={handleUploadClick}
-                    className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition group">
-                    {previewUrl ?
-                      <div className="flex flex-col items-center gap-3">
-                        <img
-                          src={previewUrl}
-                          alt="Student sheet preview"
-                          className="max-h-48 rounded-lg shadow-sm"
-                        />
-                        <p className="text-sm text-emerald-600 font-medium">
-                          {studentSheetFile?.name}
-                        </p>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setStudentSheetFile(null);
-                            setPreviewUrl(null);
-                            if (fileInputRef.current) {
-                              fileInputRef.current.value = "";
-                            }
-                          }}
-                          className="text-xs text-red-500 hover:text-red-700">
-                          Remove file
-                        </button>
-                      </div>
-                    : <div className="flex flex-col items-center gap-3">
-                        <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center group-hover:bg-emerald-200 transition">
-                          <FaUpload className="text-emerald-600 text-2xl" />
-                        </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-700">
-                            Click to select an image
-                          </p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            PNG, JPG, JPEG up to 10MB
-                          </p>
-                        </div>
-                      </div>
-                    }
-                  </div>
-
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileSelect}
-                    className="hidden"
-                  />
-
-                  {error && (
-                    <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                      <FaExclamationTriangle />
-                      <span>{error}</span>
-                    </div>
-                  )}
-
-                  <button
-                    onClick={handleCompare}
-                    disabled={!studentSheetFile || comparing}
-                    className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white py-3 rounded-xl hover:shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium">
-                    {comparing ?
-                      <>
-                        <FaSpinner className="animate-spin" />
-                        Comparing...
-                      </>
-                    : <>
-                        <FaEye />
-                        Compare Answers
-                      </>
-                    }
-                  </button>
+            {!result ?
+              /* ── Upload Section ── */
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <FaFileImage className="text-emerald-500" />
+                  <span>
+                    Upload the student's answer sheet image to compare with the
+                    answer key
+                  </span>
                 </div>
-                // Results Section
-              : <div className="space-y-6">
-                  {/* Score Card */}
-                  <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-6 text-white">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-emerald-100 text-sm">Score</p>
-                        <div className="flex items-baseline gap-3">
-                          <p className="text-5xl font-bold">{result.score}%</p>
-                          <p className="text-2xl font-semibold text-emerald-100">
-                            ({result.correct}/{result.total})
-                          </p>
-                        </div>
-                        <p className="text-emerald-100 text-sm mt-1">
-                          {result.correct} out of {result.total} correct
-                        </p>
+
+                <div className="flex gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                  <FaExclamationTriangle className="text-amber-500 text-lg mt-0.5 flex-shrink-0" />
+                  <div className="space-y-2 text-sm">
+                    <p className="font-semibold text-amber-800">
+                      Important — Before You Upload
+                    </p>
+                    <ul className="space-y-1 text-amber-700 text-xs leading-relaxed">
+                      <li>
+                        <span className="font-medium">Accepted formats:</span>{" "}
+                        PNG, JPG, and JPEG only.
+                      </li>
+                      <li>
+                        <span className="font-medium">Max file size:</span> 10
+                        MB per image.
+                      </li>
+                      <li>
+                        <span className="font-medium">Rate limit:</span> Up to{" "}
+                        <span className="font-medium">
+                          10 sheets per minute
+                        </span>
+                        .
+                      </li>
+                      <li>
+                        <span className="font-medium">Image quality:</span> Use
+                        a clear, well-lit, flat photo with letters written large
+                        and dark.
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div
+                  onClick={handleUploadClick}
+                  className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-emerald-400 hover:bg-emerald-50 transition group">
+                  {previewUrl ?
+                    <div className="flex flex-col items-center gap-3">
+                      <img
+                        src={previewUrl}
+                        alt="Student sheet preview"
+                        className="max-h-48 rounded-lg shadow-sm"
+                      />
+                      <p className="text-sm text-emerald-600 font-medium">
+                        {studentSheetFile?.name}
+                      </p>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setStudentSheetFile(null);
+                          setPreviewUrl(null);
+                          if (fileInputRef.current)
+                            fileInputRef.current.value = "";
+                        }}
+                        className="text-xs text-red-500 hover:text-red-700">
+                        Remove file
+                      </button>
+                    </div>
+                  : <div className="flex flex-col items-center gap-3">
+                      <div className="w-16 h-16 bg-emerald-100 rounded-2xl flex items-center justify-center group-hover:bg-emerald-200 transition">
+                        <FaUpload className="text-emerald-600 text-2xl" />
                       </div>
-                      <div className="text-right">
-                        <p
-                          className={`text-6xl font-bold ${result.grade.color}`}>
-                          {result.grade.letter}
+                      <div>
+                        <p className="text-sm font-medium text-gray-700">
+                          Click to select an image
                         </p>
-                        <p className="text-emerald-100 text-sm">
-                          {result.grade.label}
+                        <p className="text-xs text-gray-400 mt-1">
+                          PNG, JPG, JPEG up to 10MB
                         </p>
                       </div>
                     </div>
-                  </div>
+                  }
+                </div>
 
-                  {/* Detailed Breakdown */}
-                  <div>
-                    <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                      <FaChartPie className="text-emerald-600" />
-                      Question Breakdown
-                    </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                      {result.details.map((detail, index) => (
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+
+                {error && (
+                  <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                    <FaExclamationTriangle />
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleCompare}
+                  disabled={!studentSheetFile || comparing}
+                  className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 text-white py-3 rounded-xl hover:shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 font-medium">
+                  {comparing ?
+                    <>
+                      <FaSpinner className="animate-spin" /> Comparing...
+                    </>
+                  : <>
+                      <FaEye /> Compare Answers
+                    </>
+                  }
+                </button>
+              </div>
+            : /* ── Results Section ── */
+              <div className="space-y-6">
+                {/* Score Card */}
+                <div className="bg-gradient-to-r from-emerald-600 to-emerald-500 rounded-2xl p-6 text-white">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-emerald-100 text-sm">Score</p>
+                      <div className="flex items-baseline gap-3">
+                        <p className="text-5xl font-bold">{result.score}%</p>
+                        <p className="text-2xl font-semibold text-emerald-100">
+                          ({result.correct}/{result.total})
+                        </p>
+                      </div>
+                      <p className="text-emerald-100 text-sm mt-1">
+                        {result.correct} out of {result.total} correct
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-6xl font-bold ${result.grade.color}`}>
+                        {result.grade.letter}
+                      </p>
+                      <p className="text-emerald-100 text-sm">
+                        {result.grade.label}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Legend */}
+                <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full bg-green-400 inline-block" />
+                    Correct
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full bg-red-400 inline-block" />
+                    Wrong
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="w-3 h-3 rounded-full bg-amber-400 inline-block" />
+                    Blank / unreadable
+                  </span>
+                </div>
+
+                {/* Detailed Breakdown */}
+                <div>
+                  <h4 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                    <FaChartPie className="text-emerald-600" />
+                    Question Breakdown
+                  </h4>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                    {result.details.map((detail, index) => {
+                      const status = getQuestionStatus(detail);
+                      const label = statusLabel(detail);
+
+                      const cardClass =
+                        status === "correct" ?
+                          "bg-green-50 border border-green-200"
+                        : status === "unclear" ?
+                          "bg-amber-50 border border-amber-200"
+                        : "bg-red-50 border border-red-200";
+
+                      const answerColor =
+                        status === "correct" ? "text-green-600"
+                        : status === "unclear" ? "text-amber-500"
+                        : "text-red-500";
+
+                      const answerDisplay =
+                        (
+                          detail.studentAnswer === null ||
+                          detail.studentAnswer === "?"
+                        ) ?
+                          "—"
+                        : detail.studentAnswer;
+
+                      return (
                         <div
                           key={index}
-                          className={`p-3 rounded-lg text-center ${
-                            detail.isCorrect ?
-                              "bg-green-50 border border-green-200"
-                            : "bg-red-50 border border-red-200"
-                          }`}>
-                          <p className="text-xs text-gray-500">
+                          className={`p-3 rounded-lg text-center ${cardClass}`}>
+                          {/* Question number */}
+                          <p className="text-xs text-gray-400 mb-1">
                             Q{detail.questionNumber}
                           </p>
-                          <div className="flex items-center justify-center gap-1 mt-1">
-                            <span className="text-sm font-medium">
-                              {detail.studentAnswer ?? "—"}
-                            </span>
-                            {detail.isCorrect ?
-                              <FaCheck className="text-green-500 text-xs" />
-                            : <FaCross className="text-red-500 text-xs" />}
-                          </div>
-                          <p className="text-xs text-gray-400 mt-1">
-                            Correct: {detail.correctAnswer}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
 
-                  {/* Action Buttons */}
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => {
-                        setResult(null);
-                        setStudentSheetFile(null);
-                        setPreviewUrl(null);
-                        if (fileInputRef.current) {
-                          fileInputRef.current.value = "";
-                        }
-                      }}
-                      className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition">
-                      Compare Another
-                    </button>
-                    <button
-                      onClick={handleClose}
-                      className="flex-1 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white px-4 py-2 rounded-lg hover:shadow-lg transition">
-                      <FaCheckCircle className="inline mr-2" />
-                      Done
-                    </button>
+                          {/* Student's answer — large */}
+                          <div
+                            className={`text-xl font-bold flex items-center justify-center gap-1 ${answerColor}`}>
+                            <span>{answerDisplay}</span>
+                            {status === "correct" && (
+                              <FaCheck className="text-green-500 text-xs" />
+                            )}
+                            {status === "wrong" && (
+                              <FaCross className="text-red-500 text-xs" />
+                            )}
+                            {status === "unclear" && (
+                              <FaExclamationTriangle className="text-amber-400 text-xs" />
+                            )}
+                          </div>
+
+                          {/* Correct answer — always visible */}
+                          <p className="text-xs mt-1">
+                            <span className="text-gray-400">Key: </span>
+                            <span className="font-semibold text-gray-600">
+                              {detail.correctAnswer}
+                            </span>
+                          </p>
+
+                          {/* Blank / not found label */}
+                          {label && (
+                            <p className="text-xs text-amber-500 mt-0.5 italic">
+                              {label}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
+                {/* Summary row */}
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="bg-green-50 border border-green-100 rounded-xl p-3">
+                    <p className="text-2xl font-bold text-green-600">
+                      {result.details.filter((d) => d.isCorrect).length}
+                    </p>
+                    <p className="text-xs text-green-700 mt-0.5">Correct</p>
+                  </div>
+                  <div className="bg-red-50 border border-red-100 rounded-xl p-3">
+                    <p className="text-2xl font-bold text-red-500">
+                      {
+                        result.details.filter(
+                          (d) =>
+                            !d.isCorrect &&
+                            d.studentAnswer !== null &&
+                            d.studentAnswer !== "?",
+                        ).length
+                      }
+                    </p>
+                    <p className="text-xs text-red-600 mt-0.5">Wrong</p>
+                  </div>
+                  <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                    <p className="text-2xl font-bold text-amber-500">
+                      {
+                        result.details.filter(
+                          (d) =>
+                            d.studentAnswer === null || d.studentAnswer === "?",
+                        ).length
+                      }
+                    </p>
+                    <p className="text-xs text-amber-600 mt-0.5">
+                      Blank / unreadable
+                    </p>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setResult(null);
+                      setStudentSheetFile(null);
+                      setPreviewUrl(null);
+                      if (fileInputRef.current) fileInputRef.current.value = "";
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition">
+                    Compare Another
+                  </button>
+                  <button
+                    onClick={handleClose}
+                    className="flex-1 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white px-4 py-2 rounded-lg hover:shadow-lg transition">
+                    <FaCheckCircle className="inline mr-2" />
+                    Done
+                  </button>
+                </div>
+              </div>
             }
           </div>
         </div>
